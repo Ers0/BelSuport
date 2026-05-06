@@ -38,48 +38,206 @@ async function sendEmail({ to, subject, html }) {
   await transporter.sendMail({ from:`"Belenergy Support Pro" <${process.env.GMAIL_USER||process.env.SMTP_USER}>`, to, subject, html });
 }
 
-// ── Email templates ───────────────────────────────────────────────────────────
-function approvedEmailHtml(name, role) {
-  const roleLabel = { master:'Master', admin:'Admin', technician:'Técnico' }[role] || role;
-  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background:#f4f6f9;font-family:'Segoe UI',sans-serif">
-  <div style="max-width:520px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">
-    <div style="background:linear-gradient(135deg,#0f111a,#1a1d2e);padding:36px 40px;text-align:center">
-      <div style="font-size:42px;margin-bottom:12px">⚡</div>
-      <h1 style="color:#FFD700;font-size:22px;margin:0;font-weight:800">Belenergy Support Pro</h1>
-    </div>
-    <div style="padding:36px 40px">
-      <h2 style="color:#1a1a2e;font-size:20px;margin:0 0 16px">✅ Seu acesso foi aprovado!</h2>
-      <p style="color:#374151;font-size:15px;line-height:1.7;margin:0 0 20px">Olá <strong>${name}</strong>, sua solicitação foi aprovada.</p>
-      <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px;margin-bottom:24px">
-        <p style="margin:0;font-size:13px;color:#6b7280">Perfil de acesso</p>
-        <p style="margin:6px 0 0;font-size:18px;font-weight:700;color:#1a1a2e">${roleLabel}</p>
+// ── Email templates (all in Portuguese) ──────────────────────────────────────
+
+const BASE_STYLE = `
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#1a1a2e;font-size:14px;line-height:1.6}
+    .wrap{max-width:560px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.1)}
+    .header{background:linear-gradient(135deg,#0C0E16 0%,#1C1F2E 100%);padding:32px 40px;text-align:center}
+    .logo{display:inline-flex;align-items:center;gap:10px;margin-bottom:4px}
+    .logo-icon{width:40px;height:40px;background:linear-gradient(135deg,#FFD700,#FF8C00);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;line-height:1}
+    .logo-text{color:#fff;font-size:18px;font-weight:800;letter-spacing:-.02em}
+    .logo-sub{color:#6B7694;font-size:11px;margin-top:2px}
+    .badge{display:inline-block;padding:4px 14px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-top:12px}
+    .body{padding:36px 40px}
+    .greeting{font-size:22px;font-weight:800;color:#0C0E16;margin-bottom:12px}
+    .text{color:#374151;font-size:14px;line-height:1.7;margin-bottom:16px}
+    .info-box{background:#f8f9fb;border:1px solid #e5e7eb;border-radius:10px;padding:18px 20px;margin:20px 0}
+    .info-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #e5e7eb}
+    .info-row:last-child{border-bottom:none}
+    .info-label{font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em}
+    .info-value{font-size:14px;font-weight:700;color:#1a1a2e}
+    .btn{display:block;text-align:center;padding:15px 32px;background:#FFD700;color:#000;border-radius:10px;text-decoration:none;font-weight:800;font-size:15px;margin:24px 0}
+    .btn:hover{background:#FFC400}
+    .divider{height:1px;background:#e5e7eb;margin:24px 0}
+    .footer{padding:20px 40px;border-top:1px solid #f3f4f6;text-align:center}
+    .footer p{color:#9ca3af;font-size:11px;line-height:1.6}
+    .highlight{color:#FFD700;font-weight:700}
+    .role-master{background:rgba(239,68,68,.1);color:#dc2626;border:1px solid rgba(239,68,68,.2)}
+    .role-admin{background:rgba(255,215,0,.1);color:#b45309;border:1px solid rgba(255,215,0,.3)}
+    .role-technician{background:rgba(96,165,250,.1);color:#1d4ed8;border:1px solid rgba(96,165,250,.2)}
+  </style>`;
+
+// ── 1. Acesso solicitado (para admins/masters) — novo usuário tentou entrar ──
+function accessRequestEmailHtml(requesterName, requesterEmail, appUrl) {
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">${BASE_STYLE}</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <div>
+        <div class="logo-text">Belenergy Support Pro</div>
+        <div class="logo-sub">Sistema de Suporte Técnico</div>
       </div>
-      <a href="${process.env.APP_URL||'http://localhost:3000'}" style="display:block;text-align:center;padding:14px;background:#FFD700;color:#000;border-radius:10px;text-decoration:none;font-weight:800;font-size:15px">Entrar no sistema →</a>
+    </div>
+    <div class="badge" style="background:rgba(255,215,0,.15);color:#FFD700;border:1px solid rgba(255,215,0,.3)">
+      🔔 Novo Pedido de Acesso
     </div>
   </div>
+  <div class="body">
+    <div class="greeting">Um novo usuário quer entrar no sistema</div>
+    <p class="text">
+      Um usuário tentou acessar o Belenergy Support Pro mas ainda não possui autorização.
+      Revise os dados abaixo e aprove ou recuse o acesso diretamente na plataforma.
+    </p>
+    <div class="info-box">
+      <div class="info-row">
+        <span class="info-label">Nome</span>
+        <span class="info-value">${requesterName}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">E-mail</span>
+        <span class="info-value">${requesterEmail}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Data da solicitação</span>
+        <span class="info-value">${new Date().toLocaleString('pt-BR')}</span>
+      </div>
+    </div>
+    <p class="text">
+      Para aprovar ou recusar, acesse a aba <strong>Configurações → Aprovações</strong> no sistema.
+    </p>
+    <a href="${appUrl}/configuracoes" class="btn">
+      Gerenciar Aprovações →
+    </a>
+    <div class="divider"></div>
+    <p class="text" style="font-size:12px;color:#9ca3af">
+      Se você não reconhece este usuário, simplesmente ignore este e-mail. O acesso não será liberado sem sua aprovação.
+    </p>
+  </div>
+  <div class="footer">
+    <p>Belenergy Support Pro · ${new Date().getFullYear()}<br>Este é um e-mail automático, não responda.</p>
+  </div>
+</div>
 </body></html>`;
 }
 
-function accessRequestEmailHtml(requesterName, requesterEmail, appUrl) {
-  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background:#f4f6f9;font-family:'Segoe UI',sans-serif">
-  <div style="max-width:520px;margin:40px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">
-    <div style="background:linear-gradient(135deg,#0f111a,#1a1d2e);padding:36px 40px;text-align:center">
-      <div style="font-size:42px;margin-bottom:12px">🔔</div>
-      <h1 style="color:#FFD700;font-size:22px;margin:0;font-weight:800">Novo Pedido de Acesso</h1>
-    </div>
-    <div style="padding:36px 40px">
-      <p style="color:#374151;font-size:15px;line-height:1.7;margin:0 0 20px">Novo usuário solicitou acesso:</p>
-      <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px;margin-bottom:24px">
-        <p style="margin:0;font-size:13px;color:#6b7280">Nome</p>
-        <p style="margin:4px 0 12px;font-size:16px;font-weight:700;color:#1a1a2e">${requesterName}</p>
-        <p style="margin:0;font-size:13px;color:#6b7280">Email</p>
-        <p style="margin:4px 0 0;font-size:15px;color:#1a1a2e">${requesterEmail}</p>
+// ── 2. Acesso aprovado (para o usuário aprovado por master/admin) ─────────────
+function approvedEmailHtml(name, role) {
+  const roles = {
+    master:     { label:'Master', cls:'role-master', desc:'Acesso total ao sistema, incluindo gerenciamento de usuários e configurações globais.' },
+    admin:      { label:'Administrador', cls:'role-admin', desc:'Acesso completo aos chamados, relatórios, configurações e aprovação de usuários.' },
+    technician: { label:'Técnico', cls:'role-technician', desc:'Acesso aos chamados, registros de suporte e ferramentas de diagnóstico.' },
+  };
+  const r = roles[role] || roles.technician;
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">${BASE_STYLE}</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <div>
+        <div class="logo-text">Belenergy Support Pro</div>
+        <div class="logo-sub">Sistema de Suporte Técnico</div>
       </div>
-      <a href="${appUrl}/configuracoes" style="display:block;text-align:center;padding:14px;background:#FFD700;color:#000;border-radius:10px;text-decoration:none;font-weight:800;font-size:15px">Gerenciar Aprovações →</a>
+    </div>
+    <div class="badge" style="background:rgba(34,197,94,.15);color:#16a34a;border:1px solid rgba(34,197,94,.3)">
+      ✅ Acesso Aprovado
     </div>
   </div>
+  <div class="body">
+    <div class="greeting">Olá, ${name}! 👋</div>
+    <p class="text">
+      Sua solicitação de acesso ao <strong>Belenergy Support Pro</strong> foi <span style="color:#16a34a;font-weight:700">aprovada</span>.
+      Você já pode entrar no sistema com sua conta Google.
+    </p>
+    <div class="info-box">
+      <div class="info-row">
+        <span class="info-label">Perfil de acesso</span>
+        <span class="badge ${r.cls}" style="font-size:12px">${r.label}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Permissões</span>
+        <span class="info-value" style="font-size:12px;text-align:right;max-width:280px">${r.desc}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Data de aprovação</span>
+        <span class="info-value">${new Date().toLocaleString('pt-BR')}</span>
+      </div>
+    </div>
+    <a href="${process.env.APP_URL || 'http://localhost:3000'}" class="btn">
+      ⚡ Entrar no sistema agora
+    </a>
+    <div class="divider"></div>
+    <p class="text" style="font-size:12px;color:#9ca3af">
+      Em caso de dúvidas sobre seu acesso, entre em contato com o administrador do sistema.
+    </p>
+  </div>
+  <div class="footer">
+    <p>Belenergy Support Pro · ${new Date().getFullYear()}<br>Este é um e-mail automático, não responda.</p>
+  </div>
+</div>
+</body></html>`;
+}
+
+// ── 3. Pré-aprovado — enviado quando o usuário pré-aprovado faz login ─────────
+function preApprovedEmailHtml(name, role) {
+  const roles = {
+    master:     { label:'Master',        cls:'role-master' },
+    admin:      { label:'Administrador', cls:'role-admin' },
+    technician: { label:'Técnico',       cls:'role-technician' },
+  };
+  const r = roles[role] || roles.technician;
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">${BASE_STYLE}</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <div>
+        <div class="logo-text">Belenergy Support Pro</div>
+        <div class="logo-sub">Sistema de Suporte Técnico</div>
+      </div>
+    </div>
+    <div class="badge" style="background:rgba(96,165,250,.15);color:#1d4ed8;border:1px solid rgba(96,165,250,.3)">
+      🎉 Conta Ativada
+    </div>
+  </div>
+  <div class="body">
+    <div class="greeting">Bem-vindo ao Belenergy, ${name}!</div>
+    <p class="text">
+      Sua conta no <strong>Belenergy Support Pro</strong> foi ativada com sucesso.
+      O administrador já configurou seu acesso antes mesmo do seu primeiro login — você está pronto para começar!
+    </p>
+    <div class="info-box">
+      <div class="info-row">
+        <span class="info-label">Perfil de acesso</span>
+        <span class="badge ${r.cls}" style="font-size:12px">${r.label}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Primeiro acesso</span>
+        <span class="info-value">${new Date().toLocaleString('pt-BR')}</span>
+      </div>
+    </div>
+    <p class="text">
+      Dicas para começar:
+    </p>
+    <ul style="color:#374151;font-size:14px;line-height:2;margin:0 0 20px 20px">
+      <li>Acesse <strong>Registro</strong> para criar novos chamados</li>
+      <li>Use o <strong>Dashboard</strong> para acompanhar o desempenho da equipe</li>
+      <li>Configure suas preferências em <strong>Configurações</strong></li>
+    </ul>
+    <a href="${process.env.APP_URL || 'http://localhost:3000'}" class="btn">
+      ⚡ Entrar no sistema
+    </a>
+  </div>
+  <div class="footer">
+    <p>Belenergy Support Pro · ${new Date().getFullYear()}<br>Este é um e-mail automático, não responda.</p>
+  </div>
+</div>
 </body></html>`;
 }
 
@@ -247,92 +405,313 @@ async function runExport(userId) {
     },
   });
 
-  // ── Formatting ────────────────────────────────────────────────────────────
+
+  // ── Belenergy color palette ────────────────────────────────────────────────
+  const C = {
+    bg:      { red:0.047, green:0.055, blue:0.086 },  // #0C0E16
+    s1:      { red:0.075, green:0.086, blue:0.129 },  // #131621
+    s2:      { red:0.110, green:0.122, blue:0.180 },  // #1C1F2E
+    s3:      { red:0.141, green:0.157, blue:0.251 },  // #242840
+    yellow:  { red:1.000, green:0.843, blue:0.000 },  // #FFD700
+    orange:  { red:0.984, green:0.620, blue:0.235 },  // #FB923C
+    green:   { red:0.133, green:0.773, blue:0.369 },  // #22C55E
+    red:     { red:0.937, green:0.267, blue:0.267 },  // #EF4444
+    blue:    { red:0.376, green:0.647, blue:0.980 },  // #60A5FA
+    purple:  { red:0.655, green:0.545, blue:0.980 },  // #A78BFA
+    tx:      { red:0.933, green:0.941, blue:0.973 },  // #EEF0F8
+    tm:      { red:0.420, green:0.463, blue:0.580 },  // #6B7694
+    white:   { red:1.000, green:1.000, blue:1.000 },
+  };
+
+  function cell(bg, fg, bold=false, fontSize=10, italic=false) {
+    return { userEnteredFormat: {
+      backgroundColor: bg,
+      textFormat: { bold, italic, fontSize, foregroundColor: fg },
+      verticalAlignment: 'MIDDLE',
+      padding: { top:4, bottom:4, left:8, right:8 },
+    }};
+  }
+
+  function border(color) {
+    return { style:'SOLID', colorStyle:{ rgbColor:color } };
+  }
+
+  function borders(c) {
+    return { top:border(c), bottom:border(c), left:border(c), right:border(c) };
+  }
+
   const dataSheetIds = [SH.pendentes,SH.aguardando,SH.concluidos,SH.clientes,SH.agenda,SH.solucoes,SH.produtos,SH.historico];
   const allSheetIds  = Object.values(SH);
 
+  const techCount = Object.keys(byTech).length;
+  const fabCount  = fabEntries.length;
+  const techHeaderRow = 12 + fabCount; // row index of technician header
+
   const formatRequests = [
-    // Dark header on all data tabs
+    // ── Global: dark background on all sheets ─────────────────────────────
+    ...allSheetIds.map(sheetId => ({
+      repeatCell: {
+        range: { sheetId, startRowIndex:0, endRowIndex:1000, startColumnIndex:0, endColumnIndex:20 },
+        cell: cell(C.s1, C.tx),
+        fields: 'userEnteredFormat(backgroundColor,textFormat,verticalAlignment,padding)',
+      },
+    })),
+
+    // ── Data tabs: yellow header row ──────────────────────────────────────
     ...dataSheetIds.map(sheetId => ({
       repeatCell: {
         range: { sheetId, startRowIndex:0, endRowIndex:1 },
         cell: { userEnteredFormat: {
-          backgroundColor: { red:0.06, green:0.07, blue:0.1 },
-          textFormat: { bold:true, foregroundColor:{ red:1, green:0.843, blue:0 } },
+          backgroundColor: C.bg,
+          textFormat: { bold:true, fontSize:10, foregroundColor:C.yellow },
+          verticalAlignment: 'MIDDLE',
+          padding: { top:6, bottom:6, left:8, right:8 },
         }},
-        fields: 'userEnteredFormat(backgroundColor,textFormat)',
+        fields: 'userEnteredFormat(backgroundColor,textFormat,verticalAlignment,padding)',
       },
     })),
-    // Freeze header row
+
+    // ── Data tabs: alternating row colors ─────────────────────────────────
+    ...dataSheetIds.flatMap(sheetId =>
+      Array.from({ length:200 }, (_, i) => i + 1).filter(i => i % 2 === 0).map(i => ({
+        repeatCell: {
+          range: { sheetId, startRowIndex:i, endRowIndex:i+1, startColumnIndex:0, endColumnIndex:20 },
+          cell: { userEnteredFormat: { backgroundColor:C.s2 } },
+          fields: 'userEnteredFormat.backgroundColor',
+        },
+      }))
+    ),
+
+    // ── Cases tabs: color-code status column (col 9) ──────────────────────
+    // Pendentes tab — orange tint on all rows
+    { repeatCell: {
+      range: { sheetId:SH.pendentes, startRowIndex:1, endRowIndex:500, startColumnIndex:9, endColumnIndex:10 },
+      cell: { userEnteredFormat: { textFormat:{ bold:true, foregroundColor:C.orange } } },
+      fields: 'userEnteredFormat.textFormat',
+    }},
+    // Aguardando tab — blue tint
+    { repeatCell: {
+      range: { sheetId:SH.aguardando, startRowIndex:1, endRowIndex:500, startColumnIndex:9, endColumnIndex:10 },
+      cell: { userEnteredFormat: { textFormat:{ bold:true, foregroundColor:C.blue } } },
+      fields: 'userEnteredFormat.textFormat',
+    }},
+    // Concluidos tab — green tint
+    { repeatCell: {
+      range: { sheetId:SH.concluidos, startRowIndex:1, endRowIndex:500, startColumnIndex:9, endColumnIndex:10 },
+      cell: { userEnteredFormat: { textFormat:{ bold:true, foregroundColor:C.green } } },
+      fields: 'userEnteredFormat.textFormat',
+    }},
+
+    // ── Resumo: title row ─────────────────────────────────────────────────
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:0, endRowIndex:1 },
+      cell: { userEnteredFormat: {
+        backgroundColor: C.bg,
+        textFormat: { bold:true, fontSize:16, foregroundColor:C.yellow },
+        verticalAlignment: 'MIDDLE',
+        padding: { top:10, bottom:10, left:12, right:12 },
+      }},
+      fields: 'userEnteredFormat(backgroundColor,textFormat,verticalAlignment,padding)',
+    }},
+    // Resumo: subtitle rows (generated at, period)
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:1, endRowIndex:3 },
+      cell: { userEnteredFormat: { backgroundColor:C.s2, textFormat:{ fontSize:10, foregroundColor:C.tm } } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    }},
+
+    // ── Resumo: STATUS section header ─────────────────────────────────────
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:4, endRowIndex:5 },
+      cell: { userEnteredFormat: {
+        backgroundColor: C.s3,
+        textFormat: { bold:true, fontSize:10, foregroundColor:C.yellow },
+        verticalAlignment: 'MIDDLE', padding:{ top:6,bottom:6,left:8,right:8 },
+      }},
+      fields: 'userEnteredFormat(backgroundColor,textFormat,verticalAlignment,padding)',
+    }},
+    // Pendentes row — orange
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:5, endRowIndex:6 },
+      cell: { userEnteredFormat: { backgroundColor:C.s2, textFormat:{ foregroundColor:C.orange, bold:true } } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    }},
+    // Aguardando row — blue
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:6, endRowIndex:7 },
+      cell: { userEnteredFormat: { backgroundColor:C.s1, textFormat:{ foregroundColor:C.blue, bold:true } } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    }},
+    // Concluidos row — green
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:7, endRowIndex:8 },
+      cell: { userEnteredFormat: { backgroundColor:C.s2, textFormat:{ foregroundColor:C.green, bold:true } } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    }},
+    // Total row — yellow bold
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:8, endRowIndex:9 },
+      cell: { userEnteredFormat: { backgroundColor:C.s3, textFormat:{ foregroundColor:C.yellow, bold:true, fontSize:11 } } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    }},
+
+    // ── Resumo: FABRICANTE section header ─────────────────────────────────
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:10, endRowIndex:11 },
+      cell: { userEnteredFormat: {
+        backgroundColor: C.s3,
+        textFormat: { bold:true, fontSize:10, foregroundColor:C.blue },
+        verticalAlignment: 'MIDDLE', padding:{ top:6,bottom:6,left:8,right:8 },
+      }},
+      fields: 'userEnteredFormat(backgroundColor,textFormat,verticalAlignment,padding)',
+    }},
+    // Fab rows alternating
+    ...Array.from({ length: fabCount }, (_, i) => ({
+      repeatCell: {
+        range: { sheetId:SH.resumo, startRowIndex:11+i, endRowIndex:12+i },
+        cell: { userEnteredFormat: { backgroundColor: i%2===0 ? C.s1 : C.s2 } },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    })),
+
+    // ── Resumo: TECNICO section header ────────────────────────────────────
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:techHeaderRow, endRowIndex:techHeaderRow+1 },
+      cell: { userEnteredFormat: {
+        backgroundColor: C.s3,
+        textFormat: { bold:true, fontSize:10, foregroundColor:C.green },
+        verticalAlignment: 'MIDDLE', padding:{ top:6,bottom:6,left:8,right:8 },
+      }},
+      fields: 'userEnteredFormat(backgroundColor,textFormat,verticalAlignment,padding)',
+    }},
+    // Tech rows alternating
+    ...Array.from({ length: techCount }, (_, i) => ({
+      repeatCell: {
+        range: { sheetId:SH.resumo, startRowIndex:techHeaderRow+1+i, endRowIndex:techHeaderRow+2+i },
+        cell: { userEnteredFormat: { backgroundColor: i%2===0 ? C.s1 : C.s2 } },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    })),
+
+    // ── Resumo: VISAO GERAL footer ────────────────────────────────────────
+    { repeatCell: {
+      range: { sheetId:SH.resumo, startRowIndex:techHeaderRow+techCount+2, endRowIndex:techHeaderRow+techCount+6 },
+      cell: { userEnteredFormat: { backgroundColor:C.s2, textFormat:{ foregroundColor:C.tm } } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    }},
+
+    // ── Freeze header rows ────────────────────────────────────────────────
     ...dataSheetIds.map(sheetId => ({
       updateSheetProperties: { properties:{ sheetId, gridProperties:{ frozenRowCount:1 } }, fields:'gridProperties.frozenRowCount' },
     })),
-    // Auto-resize
+
+    // ── Auto-resize all columns ───────────────────────────────────────────
     ...allSheetIds.map(sheetId => ({
       autoResizeDimensions: { dimensions:{ sheetId, dimension:'COLUMNS', startIndex:0, endIndex:14 } },
     })),
-    // Summary title style
-    { repeatCell: { range:{ sheetId:SH.resumo, startRowIndex:0, endRowIndex:1 },
-        cell:{ userEnteredFormat:{ textFormat:{ bold:true, fontSize:16, foregroundColor:{ red:1, green:0.843, blue:0 } } } },
-        fields:'userEnteredFormat.textFormat' } },
-    // Status header row (row 5, index 4) bold
-    { repeatCell: { range:{ sheetId:SH.resumo, startRowIndex:4, endRowIndex:5 },
-        cell:{ userEnteredFormat:{ backgroundColor:{ red:0.06,green:0.07,blue:0.1 }, textFormat:{ bold:true, foregroundColor:{ red:1,green:0.843,blue:0 } } } },
-        fields:'userEnteredFormat(backgroundColor,textFormat)' } },
-    // Fabricante header (row after status block)
-    { repeatCell: { range:{ sheetId:SH.resumo, startRowIndex:10, endRowIndex:11 },
-        cell:{ userEnteredFormat:{ backgroundColor:{ red:0.1,green:0.1,blue:0.18 }, textFormat:{ bold:true, foregroundColor:{ red:0.6,green:0.76,blue:1 } } } },
-        fields:'userEnteredFormat(backgroundColor,textFormat)' } },
-    // Technician header
-    { repeatCell: { range:{ sheetId:SH.resumo, startRowIndex: 12 + fabEntries.length, endRowIndex: 13 + fabEntries.length },
-        cell:{ userEnteredFormat:{ backgroundColor:{ red:0.1,green:0.18,blue:0.1 }, textFormat:{ bold:true, foregroundColor:{ red:0.13,green:0.77,blue:0.37 } } } },
-        fields:'userEnteredFormat(backgroundColor,textFormat)' } },
+
+    // ── Tab colors ────────────────────────────────────────────────────────
+    { updateSheetProperties: { properties:{ sheetId:SH.resumo,     tabColorStyle:{ rgbColor:C.yellow  } }, fields:'tabColorStyle' } },
+    { updateSheetProperties: { properties:{ sheetId:SH.pendentes,  tabColorStyle:{ rgbColor:C.orange  } }, fields:'tabColorStyle' } },
+    { updateSheetProperties: { properties:{ sheetId:SH.aguardando, tabColorStyle:{ rgbColor:C.blue    } }, fields:'tabColorStyle' } },
+    { updateSheetProperties: { properties:{ sheetId:SH.concluidos, tabColorStyle:{ rgbColor:C.green   } }, fields:'tabColorStyle' } },
+    { updateSheetProperties: { properties:{ sheetId:SH.clientes,   tabColorStyle:{ rgbColor:C.purple  } }, fields:'tabColorStyle' } },
+    { updateSheetProperties: { properties:{ sheetId:SH.agenda,     tabColorStyle:{ rgbColor:C.blue    } }, fields:'tabColorStyle' } },
+    { updateSheetProperties: { properties:{ sheetId:SH.solucoes,   tabColorStyle:{ rgbColor:C.green   } }, fields:'tabColorStyle' } },
+    { updateSheetProperties: { properties:{ sheetId:SH.produtos,   tabColorStyle:{ rgbColor:C.tm      } }, fields:'tabColorStyle' } },
+    { updateSheetProperties: { properties:{ sheetId:SH.historico,  tabColorStyle:{ rgbColor:C.s3      } }, fields:'tabColorStyle' } },
   ];
 
-  await sheets.spreadsheets.batchUpdate({ spreadsheetId:ssId, requestBody:{ requests:formatRequests } });
+  // Split into batches of 30 to avoid API limits
+  for (let i = 0; i < formatRequests.length; i += 30) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: ssId,
+      requestBody: { requests: formatRequests.slice(i, i + 30) },
+    });
+  }
 
   // ── Charts on Resumo tab ──────────────────────────────────────────────────
   // Only add charts on first creation to avoid duplicates on update
   if (isNew) {
+    const chartBg = { rgbColor: C.s2 };
+    const titleFmt = { bold:true, fontSize:12, foregroundColor:C.yellow };
+
     const chartRequests = [
-      // Pie chart — status breakdown (rows 5-8, cols A-B = indices 4-8, 0-1)
+      // ── Pie: status breakdown ──────────────────────────────────────────
       { addChart: { chart: {
         spec: {
           title: 'Chamados por Status',
-          titleTextFormat: { bold:true, fontSize:12, foregroundColor:{ red:0.93,green:0.84,blue:0 } },
+          titleTextFormat: titleFmt,
+          backgroundColorStyle: chartBg,
           pieChart: {
             legendPosition: 'RIGHT_LEGEND',
-            series: { dataRange: { sheetId:SH.resumo, startRowIndex:5, endRowIndex:8, startColumnIndex:1, endColumnIndex:2 } },
-            domain: { dataRange: { sheetId:SH.resumo, startRowIndex:5, endRowIndex:8, startColumnIndex:0, endColumnIndex:1 } },
+            threeDimensional: false,
+            domain: { data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:5, endRowIndex:8, startColumnIndex:0, endColumnIndex:1 }] } } },
+            series: { data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:5, endRowIndex:8, startColumnIndex:1, endColumnIndex:2 }] } } },
           },
-          backgroundColorStyle: { rgbColor:{ red:0.11,green:0.13,blue:0.2 } },
         },
         position: { overlayPosition: {
           anchorCell: { sheetId:SH.resumo, rowIndex:0, columnIndex:4 },
-          offsetXPixels:0, offsetYPixels:0, widthPixels:420, heightPixels:280,
+          widthPixels:400, heightPixels:260,
         }},
       }}},
-      // Bar chart — by fabricante
+
+      // ── Bar: by fabricante ────────────────────────────────────────────
       { addChart: { chart: {
         spec: {
           title: 'Chamados por Fabricante',
-          titleTextFormat: { bold:true, fontSize:12, foregroundColor:{ red:0.93,green:0.84,blue:0 } },
+          titleTextFormat: titleFmt,
+          backgroundColorStyle: chartBg,
           basicChart: {
             chartType: 'BAR',
             legendPosition: 'NO_LEGEND',
-            axis: [{ position:'BOTTOM_AXIS', title:'Chamados' }, { position:'LEFT_AXIS', title:'Fabricante' }],
-            domains: [{ domain: { data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:11, endRowIndex:11+fabEntries.length, startColumnIndex:0, endColumnIndex:1 }] } } } }],
-            series: [{ data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:11, endRowIndex:11+fabEntries.length, startColumnIndex:1, endColumnIndex:2 }] } } },
+            axis: [
+              { position:'BOTTOM_AXIS', title:'Chamados', format:{ foregroundColorStyle:{ rgbColor:C.tm } } },
+              { position:'LEFT_AXIS',   title:'Fabricante', format:{ foregroundColorStyle:{ rgbColor:C.tm } } },
             ],
+            domains: [{ domain: { data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:11, endRowIndex:11+fabCount, startColumnIndex:0, endColumnIndex:1 }] } } } }],
+            series: [{
+              data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:11, endRowIndex:11+fabCount, startColumnIndex:1, endColumnIndex:2 }] } },
+              color: C.yellow,
+            }],
+            headerCount: 0,
           },
-          backgroundColorStyle: { rgbColor:{ red:0.11,green:0.13,blue:0.2 } },
         },
         position: { overlayPosition: {
           anchorCell: { sheetId:SH.resumo, rowIndex:10, columnIndex:4 },
-          offsetXPixels:0, offsetYPixels:0, widthPixels:420, heightPixels: Math.max(200, fabEntries.length * 30),
+          widthPixels:400, heightPixels: Math.max(220, fabCount * 28),
+        }},
+      }}},
+
+      // ── Column: by technician ─────────────────────────────────────────
+      { addChart: { chart: {
+        spec: {
+          title: 'Chamados por Técnico',
+          titleTextFormat: titleFmt,
+          backgroundColorStyle: chartBg,
+          basicChart: {
+            chartType: 'COLUMN',
+            legendPosition: 'BOTTOM_LEGEND',
+            axis: [
+              { position:'BOTTOM_AXIS', title:'Técnico', format:{ foregroundColorStyle:{ rgbColor:C.tm } } },
+              { position:'LEFT_AXIS',   title:'Chamados', format:{ foregroundColorStyle:{ rgbColor:C.tm } } },
+            ],
+            domains: [{ domain: { data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:techHeaderRow+1, endRowIndex:techHeaderRow+1+techCount, startColumnIndex:0, endColumnIndex:1 }] } } } }],
+            series: [
+              { data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:techHeaderRow+1, endRowIndex:techHeaderRow+1+techCount, startColumnIndex:1, endColumnIndex:2 }] } }, color:C.blue,   targetAxis:'LEFT_AXIS' },
+              { data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:techHeaderRow+1, endRowIndex:techHeaderRow+1+techCount, startColumnIndex:2, endColumnIndex:3 }] } }, color:C.orange, targetAxis:'LEFT_AXIS' },
+              { data: { sourceRange: { sources: [{ sheetId:SH.resumo, startRowIndex:techHeaderRow+1, endRowIndex:techHeaderRow+1+techCount, startColumnIndex:3, endColumnIndex:4 }] } }, color:C.green,  targetAxis:'LEFT_AXIS' },
+            ],
+            headerCount: 0,
+          },
+        },
+        position: { overlayPosition: {
+          anchorCell: { sheetId:SH.resumo, rowIndex:techHeaderRow, columnIndex:4 },
+          widthPixels:420, heightPixels:280,
         }},
       }}},
     ];
+
     await sheets.spreadsheets.batchUpdate({ spreadsheetId:ssId, requestBody:{ requests:chartRequests } }).catch(e => {
       console.warn('[Sheets] Chart creation failed (non-fatal):', e.message);
     });
@@ -408,3 +787,4 @@ module.exports = router;
 module.exports.sendEmail = sendEmail;
 module.exports.accessRequestEmailHtml = accessRequestEmailHtml;
 module.exports.approvedEmailHtml = approvedEmailHtml;
+module.exports.preApprovedEmailHtml = preApprovedEmailHtml;

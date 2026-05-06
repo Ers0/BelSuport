@@ -213,6 +213,19 @@ router.get('/callback', async (req, res) => {
         .update({ used: true, used_at: new Date(), google_id: user.id })
         .eq('id', approval.id);
       console.log(`✅ [Auth] Pre-approved login: ${user.email} → role_id ${approval.role_id}`);
+
+      // Send welcome email to the pre-approved user
+      try {
+        const { sendEmail, preApprovedEmailHtml } = require('./sheets');
+        const ROLE_NAMES = { 1:'master', 2:'admin', 3:'technician' };
+        const roleName = ROLE_NAMES[Number(approval.role_id)] || 'technician';
+        await sendEmail({
+          to:      user.email,
+          subject: '✅ Bem-vindo ao Belenergy Support Pro — Acesso liberado',
+          html:    preApprovedEmailHtml(user.name || user.email, roleName),
+        });
+        console.log(`[Auth] Welcome email sent to pre-approved user: ${user.email}`);
+      } catch(e) { console.error('[Auth] Pre-approval welcome email error:', e.message); }
       // Fall through to normal session creation below
     } else if (existingUser && existingUser.role_id === null) {
       // Revoked AND no new pre-approval — hard block
