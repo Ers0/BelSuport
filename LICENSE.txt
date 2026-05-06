@@ -1,0 +1,29 @@
+Belenergy Support Pro v1.0
+Licença de Uso Interno
+----------------------------------
+
+Copyright (C) 2026 Belenergy
+
+Este software, incluindo todo o seu código-fonte, estrutura, fluxos e integrações,
+é de propriedade exclusiva da Belenergy.
+
+Este sistema foi desenvolvido para uso interno da equipe de suporte técnico da Belenergy,
+sendo estritamente proibida qualquer forma de uso externo, reprodução, distribuição,
+modificação, sublicenciamento ou compartilhamento sem autorização prévia e formal da empresa.
+
+Nenhuma parte deste software pode ser copiada, armazenada, transmitida ou disponibilizada,
+total ou parcialmente, por qualquer meio, sem o consentimento expresso da Belenergy.
+
+O acesso e utilização deste sistema são restritos a usuários autorizados, conforme
+políticas internas de controle de acesso (RBAC) e segurança da informação.
+
+Este software é fornecido “no estado em que se encontra”, sem garantias de qualquer natureza,
+expressas ou implícitas. A Belenergy não se responsabiliza por quaisquer danos diretos ou indiretos
+decorrentes do uso deste sistema.
+
+O uso indevido deste software pode resultar em medidas administrativas, civis e/ou legais,
+conforme as políticas internas da empresa e a legislação vigente.
+
+----------------------------------
+Belenergy Sistemas
+Uso Interno Restrito
