@@ -332,7 +332,7 @@ function ContactsCalendar({ attempts, onDayClick }) {
           </div>
           {attemptsByDay[dayView].map((a, i) => {
             const res = RESULT_MAP[a.result]||RESULT_MAP.other;
-            const t   = new Date(a.attempted_at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+            const t   = new Date(a.attempted_at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit', timeZone:'America/Sao_Paulo'});
             return (
               <div key={i} style={{ padding:'7px 0', borderBottom:'1px solid var(--b1)' }}>
                 {/* Entity + session header */}
@@ -381,9 +381,11 @@ function ContactsTab({ showToast }) {
   const [entityForm, setEntityForm] = useState({ category:'Clientes', name:'', phone:'', email:'', fabricante_contact_name:'', fabricante_contact_role:'', fabricante_contact_phone:'', notes:'' });
   const [sessionForm, setSessionForm] = useState({ title:'', chamado_id:'', notes:'' });
   const [attemptForm, setAttemptForm] = useState(() => {
+    // Get current time in São Paulo timezone for the datetime-local input
     const now = new Date();
-    const tzOffset = now.getTimezoneOffset() * 60000;
-    const local = new Date(now.getTime() - tzOffset).toISOString().slice(0,16);
+    const spTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const pad = n => String(n).padStart(2,'0');
+    const local = `${spTime.getFullYear()}-${pad(spTime.getMonth()+1)}-${pad(spTime.getDate())}T${pad(spTime.getHours())}:${pad(spTime.getMinutes())}`;
     return { result:'no_answer', notes:'', attempted_at: local };
   });
 
@@ -788,7 +790,7 @@ function ContactsTab({ showToast }) {
                     <div style={{ fontSize:12, fontWeight:700, color:res.color, marginBottom:1 }}>{res.label}</div>
                     <div style={{ fontSize:10.5, color:'var(--tm)', marginBottom:2 }}>por {a.author}</div>
                     <div style={{ fontSize:10.5, color:'var(--tm)', fontFamily:'monospace' }}>
-                      📅 {dt.toLocaleDateString('pt-BR', {weekday:'short', day:'2-digit', month:'2-digit', year:'numeric'})} ⏱ {dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+                      📅 {dt.toLocaleDateString('pt-BR', {weekday:'short', day:'2-digit', month:'2-digit', year:'numeric', timeZone:'America/Sao_Paulo'})} ⏱ {dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit', timeZone:'America/Sao_Paulo'})}
                     </div>
                     {a.notes && <div style={{ fontSize:12, color:'var(--ts)', background:'var(--s2)', padding:'5px 8px', borderRadius:'var(--rs)', marginTop:5, lineHeight:1.5 }}>{a.notes}</div>}
                     {/* Attachments */}

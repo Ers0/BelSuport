@@ -134,17 +134,27 @@ export default function NotificationBell({ sseEvent, onNavigate }) {
   const panelRef                  = useRef(null);
   const portal = typeof document !== 'undefined' ? document.body : null;
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const data = await api('/api/notifications');
-      setNots(Array.isArray(data) ? data : []);
-      setUnread((Array.isArray(data) ? data : []).filter(n => !n.read).length);
+      if (Array.isArray(data)) {
+        setNots(data);
+        const newUnread = data.filter(n => !n.read).length;
+        setUnread(prev => {
+          // If unread count increased, animate bell
+          if (newUnread > prev) {
+            if (Notification.permission === 'granted' && document.hidden) {
+              new Notification('Belenergy — Nova notificação', { icon: '/favicon.ico' });
+            }
+          }
+          return newUnread;
+        });
+      }
     } catch(e) {
-      console.error('[NotificationBell] load error:', e.message);
-      setNots([]);
+      if (!silent) console.error('[NotificationBell] load error:', e.message);
     }
-    setLoading(false);
+    if (!silent) setLoading(false);
   };
 
   const pollJira = async () => {
@@ -161,11 +171,28 @@ export default function NotificationBell({ sseEvent, onNavigate }) {
     } catch (_) {}
   };
 
-  // Load on mount so unread count is always visible
-  useEffect(() => { load(); }, []);
-  useEffect(() => { pollJira(); }, []);
+  // Load on mount
+  useEffect(() => { load(); pollJira(); }, []);
+
+  // Poll notifications every 30s — works on both local and Vercel cloud
+  useEffect(() => {
+    const interval = setInterval(() => {
+      load(true); // silent — no loading spinner
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Poll Jira every 60min (expensive external API call)
   useEffect(() => {
     const interval = setInterval(pollJira, 60 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // On cloud mode: also poll Jira every 5min for near-realtime status updates
+  useEffect(() => {
+    const isCloud = window.location.hostname !== 'localhost';
+    if (!isCloud) return;
+    const interval = setInterval(pollJira, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -245,8 +272,10 @@ export default function NotificationBell({ sseEvent, onNavigate }) {
           position: 'relative', padding: '4px 6px', borderRadius: 6,
           color: unread > 0 ? 'var(--y)' : 'var(--tm)',
           transition: 'color .15s', fontSize: 16, lineHeight: 1,
+          animation: unread > 0 ? 'bellPulse 2s ease-in-out infinite' : 'none',
         }}>
           🔔
+          <style>{`@keyframes bellPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.15)} }`}</style>
           {unread > 0 && (
             <span style={{
               position: 'absolute', top: -2, right: -2,
