@@ -178,7 +178,7 @@ export default function NotificationBell({ sseEvent, onNavigate }) {
   useEffect(() => {
     const interval = setInterval(() => {
       load(true); // silent — no loading spinner
-    }, 30_000);
+    }, 15_000);
     return () => clearInterval(interval);
   }, []);
 
