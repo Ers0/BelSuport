@@ -783,8 +783,70 @@ router.post('/send-approval-email', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ error:e.message }); }
 });
 
+// ── 4. Convite — enviado quando admin pré-aprova um email novo ───────────────
+function inviteEmailHtml(email, role) {
+  const roles = {
+    master:     { label:'Master',        cls:'role-master' },
+    admin:      { label:'Administrador', cls:'role-admin' },
+    technician: { label:'Técnico',       cls:'role-technician' },
+  };
+  const r = roles[role] || roles.technician;
+  const appUrl = process.env.APP_URL || 'http://localhost:3000';
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">${BASE_STYLE}</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <div>
+        <div class="logo-text">Belenergy Support Pro</div>
+        <div class="logo-sub">Sistema de Suporte Técnico</div>
+      </div>
+    </div>
+    <div class="badge" style="background:rgba(168,139,250,.15);color:#6d28d9;border:1px solid rgba(168,139,250,.3)">
+      🎉 Você foi convidado
+    </div>
+  </div>
+  <div class="body">
+    <div class="greeting">Você recebeu um convite!</div>
+    <p class="text">
+      Você foi convidado para acessar o <strong>Belenergy Support Pro</strong>,
+      o sistema de gestão de chamados técnicos da Belenergy.
+      Seu acesso já está configurado e pronto para uso.
+    </p>
+    <div class="info-box">
+      <div class="info-row">
+        <span class="info-label">E-mail de acesso</span>
+        <span class="info-value">${email}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Perfil atribuído</span>
+        <span class="badge ${r.cls}" style="font-size:12px">${r.label}</span>
+      </div>
+    </div>
+    <p class="text">
+      Para entrar, clique no botão abaixo e faça login com sua conta Google.
+      Não é necessário criar senha — o acesso é feito diretamente pelo Google.
+    </p>
+    <a href="${appUrl}" class="btn">
+      ⚡ Acessar o sistema agora
+    </a>
+    <div class="divider"></div>
+    <p class="text" style="font-size:12px;color:#9ca3af">
+      Se você não esperava este convite, pode ignorar este e-mail com segurança.
+      Nenhuma ação será tomada sem que você acesse o link acima.
+    </p>
+  </div>
+  <div class="footer">
+    <p>Belenergy Support Pro · ${new Date().getFullYear()}<br>Este é um e-mail automático, não responda.</p>
+  </div>
+</div>
+</body></html>`;
+}
+
 module.exports = router;
 module.exports.sendEmail = sendEmail;
 module.exports.accessRequestEmailHtml = accessRequestEmailHtml;
 module.exports.approvedEmailHtml = approvedEmailHtml;
 module.exports.preApprovedEmailHtml = preApprovedEmailHtml;
+module.exports.inviteEmailHtml = inviteEmailHtml;

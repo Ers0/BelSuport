@@ -532,6 +532,35 @@ router.post('/approvals', authMiddleware, async (req, res) => {
       await supabaseAdmin.from('settings_user').upsert({ user_id: ud.id, role_id: Number(role_id), updated_at: new Date() });
     }
 
+    // ── Send email notification ──────────────────────────────────────────────
+    try {
+      const { sendEmail, approvedEmailHtml, preApprovedEmailHtml, inviteEmailHtml } = require('./sheets');
+      const ROLE_NAMES = { 1:'master', 2:'admin', 3:'technician' };
+      const roleName = ROLE_NAMES[Number(role_id)] || 'technician';
+
+      if (match) {
+        // User already exists — send "access approved" email
+        console.log(`[Auth] Sending approval email to existing user: ${email}`);
+        await sendEmail({
+          to:      email.trim(),
+          subject: '✅ Seu acesso ao Belenergy Support Pro foi atualizado',
+          html:    approvedEmailHtml(email.trim(), roleName),
+        });
+      } else {
+        // New pre-approval — send invite email
+        console.log(`[Auth] Sending pre-approval invite email to: ${email}`);
+        await sendEmail({
+          to:      email.trim(),
+          subject: '🎉 Você foi convidado para o Belenergy Support Pro',
+          html:    inviteEmailHtml(email.trim(), roleName),
+        });
+      }
+      console.log(`[Auth] Email sent successfully to: ${email}`);
+    } catch(emailErr) {
+      console.error('[Auth] Failed to send pre-approval email:', emailErr.message);
+      // Don't fail the request — approval was saved successfully
+    }
+
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
