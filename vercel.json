@@ -4,13 +4,21 @@
   "outputDirectory": "public",
   "functions": {
     "api/index.js": {
-      "maxDuration": 30,
+      "maxDuration": 60,
       "memory": 1024
     }
   },
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/index.js" },
-    { "src": "/(.*)",     "dest": "/index.html"   }
+    { "src": "/assets/(.*)", "dest": "/assets/$1" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/sheets/cron",
+      "schedule": "15 20 * * *"
+    }
   ],
   "env": {
     "CLOUD_MODE": "true",
