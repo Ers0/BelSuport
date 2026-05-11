@@ -6,7 +6,7 @@
 const { supabaseAdmin } = require('./db');
 
 const _cache = new Map();
-const TTL_MS = 5 * 60 * 1000;
+const TTL_MS = 60 * 1000; // 1 min — role changes reflect quickly
 
 // ── Permission sets by role (used as safe fallback if DB is misconfigured) ───
 const GOVERNANCE_ONLY = ['manage_roles', 'assign_roles', 'override_permissions', 'delete_any_case'];
@@ -47,22 +47,32 @@ async function fetchUserPermissions(userId, userEmail) {
     if (error) console.error('[RBAC] view query error:', error.message);
 
     if (!data) {
-      // Check if row exists but role_id is null (access revoked)
+      // user_permissions view missing or returned nothing — read directly from settings_user
       const { data: su } = await supabaseAdmin
         .from('settings_user')
         .select('user_id, role_id')
         .eq('user_id', userId)
         .maybeSingle();
 
-      if (su && su.role_id === null) {
+      if (!su) {
+        console.warn(`[RBAC] No settings_user row for user_id="${userId}" (${userEmail})`);
+        return { role: 'technician', permissions: ROLE_DEFAULTS.technician };
+      }
+
+      if (su.role_id === null) {
         console.warn(`[RBAC] Access REVOKED for user_id="${userId}" (${userEmail})`);
         return { role: 'revoked', permissions: [] };
       }
 
-      // No row at all — log the fix command
-      console.warn(`[RBAC] No permissions for user_id="${userId}" (${userEmail})`);
-      console.warn(`[RBAC] Fix: UPDATE settings_user SET role_id = 3 WHERE user_id = '${userId}';`);
-      return { role: 'technician', permissions: ROLE_DEFAULTS.technician };
+      // Map role_id directly — works even without user_permissions view
+      const ROLE_MAP = { 1: 'master', 2: 'admin', 3: 'technician' };
+      const role = ROLE_MAP[su.role_id] || 'technician';
+      const permissions = ROLE_DEFAULTS[role] || ROLE_DEFAULTS.technician;
+
+      console.log(`[RBAC] Direct fallback: user_id="${userId}" role_id=${su.role_id} → role="${role}"`);
+      const result = { role, permissions };
+      _cache.set(userId, { ...result, ts: Date.now() });
+      return result;
     }
 
     // Ensure the permissions array is always complete — merge DB perms with role defaults

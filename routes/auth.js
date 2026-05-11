@@ -87,15 +87,18 @@ async function authMiddleware(req, res, next) {
     }
 
     const authHeader = req.headers.authorization || '';
-    // Also accept token from query param — needed for EventSource (SSE) which
-    // cannot set custom headers via the browser EventSource API
+    // Priority: Bearer header > query param (SSE) > httpOnly cookie (persistent login)
     const token = (authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null)
                || req.query.token
+               || req.cookies?.session_token  // auto-login from 30-day cookie
                || null;
 
     if (!token || token === 'null' || token === 'undefined') {
         return res.status(401).json({ authenticated: false, error: 'Token necessário' });
     }
+
+    // If token came from cookie but not from header, sync it back to cookie to refresh expiry
+    const tokenFromCookie = !req.headers.authorization && !req.query.token && !!req.cookies?.session_token;
 
     try {
         // 🔍 Busca a sessão. Importante: usamos .maybeSingle() para evitar erros se não achar
@@ -111,13 +114,13 @@ async function authMiddleware(req, res, next) {
         }
 
         if (data && data.user_data) {
-            // Sucesso! Decodifica o usuário e autoriza
             const sessionUser = typeof data.user_data === 'string' ? JSON.parse(data.user_data) : data.user_data;
-    
-            // Any authenticated Google user can access the app.
-            // Admin-only actions (products, global settings) are guarded
-            // per-route via the isAdmin middleware in products.js / settings.js.
             req.user = sessionUser;
+
+            // Refresh the cookie expiry if token came from cookie (sliding 30-day window)
+            if (tokenFromCookie) {
+                setSessionCookie(res, token);
+            }
             return next();
         }
 
@@ -193,42 +196,8 @@ router.get('/callback', async (req, res) => {
       .eq('user_id', user.id)
       .maybeSingle();
 
-    // ── Check pre-approval FIRST (handles re-approval after revoke) ─────────────
-    // Always check pre-approvals before blocking — admins may have re-granted access
-    const { data: approval } = await supabaseAdmin
-      .from('user_approvals')
-      .select('role_id, id')
-      .ilike('email', user.email)
-      .eq('used', false)
-      .maybeSingle();
-
-    if (approval) {
-      // Pre-approved (new or previously revoked user getting re-access)
-      await supabaseAdmin.from('settings_user').upsert({
-        user_id:    user.id,
-        role_id:    approval.role_id,
-        updated_at: new Date(),
-      });
-      await supabaseAdmin.from('user_approvals')
-        .update({ used: true, used_at: new Date(), google_id: user.id })
-        .eq('id', approval.id);
-      console.log(`✅ [Auth] Pre-approved login: ${user.email} → role_id ${approval.role_id}`);
-
-      // Send welcome email to the pre-approved user
-      try {
-        const { sendEmail, preApprovedEmailHtml } = require('./sheets');
-        const ROLE_NAMES = { 1:'master', 2:'admin', 3:'technician' };
-        const roleName = ROLE_NAMES[Number(approval.role_id)] || 'technician';
-        await sendEmail({
-          to:      user.email,
-          subject: '✅ Bem-vindo ao Belenergy Support Pro — Acesso liberado',
-          html:    preApprovedEmailHtml(user.name || user.email, roleName),
-        });
-        console.log(`[Auth] Welcome email sent to pre-approved user: ${user.email}`);
-      } catch(e) { console.error('[Auth] Pre-approval welcome email error:', e.message); }
-      // Fall through to normal session creation below
-    } else if (existingUser && existingUser.role_id === null) {
-      // Revoked AND no new pre-approval — hard block
+    // ── HARD BLOCK: revoked users (role_id = null on existing row) ────────────
+    if (existingUser && existingUser.role_id === null) {
       console.warn(`[Auth] BLOCKED revoked user: ${user.email} (${user.id})`);
       return res.send(`
         <html>
@@ -245,9 +214,28 @@ router.get('/callback', async (req, res) => {
       `);
     }
 
-    if (!existingUser && !approval) {
-      // Completely new user with no pre-approval — request access
-      {
+    if (!existingUser) {
+      // New user — check pre-approval list
+      const { data: approval } = await supabaseAdmin
+        .from('user_approvals')
+        .select('role_id, id')
+        .ilike('email', user.email)
+        .eq('used', false)
+        .maybeSingle();
+
+      if (approval) {
+        // Pre-approved — create settings_user with the approved role
+        await supabaseAdmin.from('settings_user').upsert({
+          user_id:    user.id,
+          role_id:    approval.role_id,
+          updated_at: new Date(),
+        });
+        // Mark approval as used and store google_id for future revoke lookups
+        await supabaseAdmin.from('user_approvals')
+          .update({ used: true, used_at: new Date(), google_id: user.id })
+          .eq('id', approval.id);
+        console.log(`✅ [Auth] Pre-approved login: ${user.email} → role_id ${approval.role_id}`);
+      } else {
         // Unknown user — log access request and notify admins/masters
         const { data: existing } = await supabaseAdmin
           .from('access_requests')
@@ -336,12 +324,11 @@ router.get('/callback', async (req, res) => {
     console.log("5. Tentando salvar no Supabase...");
     const { data, error: dbError } = await supabaseAdmin
       .from('persistent_sessions')
-      .insert([
-        { 
-          token: sessionToken, 
-          user_data: JSON.stringify(user) 
-        }
-      ]);
+      .insert([{
+        token:      sessionToken,
+        user_id:    user.id,    // enables name lookup without scanning all sessions
+        user_data:  JSON.stringify(user),
+      }]);
 
     if (dbError) {
       console.error("ERRO CRÍTICO NO SUPABASE:", dbError.message);
@@ -530,35 +517,6 @@ router.post('/approvals', authMiddleware, async (req, res) => {
     if (match) {
       const ud = JSON.parse(match.user_data);
       await supabaseAdmin.from('settings_user').upsert({ user_id: ud.id, role_id: Number(role_id), updated_at: new Date() });
-    }
-
-    // ── Send email notification ──────────────────────────────────────────────
-    try {
-      const { sendEmail, approvedEmailHtml, preApprovedEmailHtml, inviteEmailHtml } = require('./sheets');
-      const ROLE_NAMES = { 1:'master', 2:'admin', 3:'technician' };
-      const roleName = ROLE_NAMES[Number(role_id)] || 'technician';
-
-      if (match) {
-        // User already exists — send "access approved" email
-        console.log(`[Auth] Sending approval email to existing user: ${email}`);
-        await sendEmail({
-          to:      email.trim(),
-          subject: '✅ Seu acesso ao Belenergy Support Pro foi atualizado',
-          html:    approvedEmailHtml(email.trim(), roleName),
-        });
-      } else {
-        // New pre-approval — send invite email
-        console.log(`[Auth] Sending pre-approval invite email to: ${email}`);
-        await sendEmail({
-          to:      email.trim(),
-          subject: '🎉 Você foi convidado para o Belenergy Support Pro',
-          html:    inviteEmailHtml(email.trim(), roleName),
-        });
-      }
-      console.log(`[Auth] Email sent successfully to: ${email}`);
-    } catch(emailErr) {
-      console.error('[Auth] Failed to send pre-approval email:', emailErr.message);
-      // Don't fail the request — approval was saved successfully
     }
 
     res.json({ success: true });

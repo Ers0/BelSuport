@@ -30,9 +30,19 @@ router.post('/categoria', isAdmin, async (req, res) => {
 });
 
 router.post('/fabricante', isAdmin, async (req, res) => {
-  const { nome, categoria_id } = req.body;
+  const { nome, categoria_id, has_ficha, audit_fields } = req.body;
   if (!nome || !categoria_id) return res.status(400).json({ error: 'Nome e categoria_id obrigatorios' });
-  const { data, error } = await supabaseAdmin.from('fabricantes').insert([{ nome: nome.trim(), categoria_id }]).select().single();
+
+  const { data: existing } = await supabaseAdmin
+    .from('fabricantes').select('id').eq('nome', nome.trim()).eq('categoria_id', categoria_id).maybeSingle();
+  if (existing) return res.status(400).json({ error: `"${nome.trim()}" já existe nesta categoria` });
+
+  const { data, error } = await supabaseAdmin.from('fabricantes').insert([{
+    nome:         nome.trim(),
+    categoria_id,
+    has_ficha:    has_ficha !== false,
+    audit_fields: Array.isArray(audit_fields) ? audit_fields : [],
+  }]).select().single();
   if (error) return res.status(400).json({ error: error.message });
   res.json(data);
 });

@@ -7,7 +7,9 @@ export function Produtos({ showToast, user }) {
   const [cats, setCats]   = useState([]);
   const [selCat, setSelCat] = useState(null);
   const [newCat, setNewCat] = useState('');
-  const [newFab, setNewFab] = useState('');
+  const [newFab, setNewFab]     = useState('');
+  const [fabHasFicha, setFabHasFicha] = useState(true);
+  const [fabAuditFields, setFabAuditFields] = useState('');
   const [showCatForm, setShowCatForm] = useState(false);
   const [showFabForm, setShowFabForm] = useState(false);
   const [stats, setStats] = useState([]);
@@ -42,8 +44,14 @@ export function Produtos({ showToast, user }) {
   }
   async function addFab() {
     if (!newFab.trim() || !selCat) return;
-    await api('/api/products/fabricante', { method:'POST', body: JSON.stringify({ nome: newFab, categoria_id: selCat.id }) });
-    setNewFab(''); setShowFabForm(false); load();
+    await api('/api/products/fabricante', { method:'POST', body: JSON.stringify({
+      nome:          newFab,
+      categoria_id:  selCat.id,
+      has_ficha:     fabHasFicha,
+      audit_fields:  fabAuditFields.split(',').map(s=>s.trim()).filter(Boolean),
+    }) });
+    setNewFab(''); setFabHasFicha(true); setFabAuditFields('');
+    setShowFabForm(false); load();
   }
   async function delCat(id) {
     if (!confirm('Remover categoria?')) return;
@@ -152,10 +160,46 @@ export function Produtos({ showToast, user }) {
             {isAdmin && selCat && <Btn variant="primary" style={{ fontSize:12, padding:'7px 14px' }} onClick={() => setShowFabForm(v=>!v)}>+ Adicionar</Btn>}
           </div>
           {showFabForm && (
-            <div style={{ display:'flex', gap:6, padding:'10px 12px', borderBottom:'1px solid var(--b1)' }}>
-              <input value={newFab} onChange={e=>setNewFab(e.target.value)} placeholder="Nome do fabricante" onKeyDown={e=>e.key==='Enter'&&addFab()} style={{ flex:1 }} />
-              <Btn variant="primary" style={{ fontSize:12, padding:'7px 12px' }} onClick={addFab}>Salvar</Btn>
-              <Btn variant="ghost"   style={{ fontSize:12, padding:'7px 10px' }} onClick={() => setShowFabForm(false)}>✕</Btn>
+            <div style={{ padding:'12px', borderBottom:'1px solid var(--b1)', background:'var(--s2)' }}>
+              <div style={{ display:'flex', gap:6, marginBottom:8 }}>
+                <input value={newFab} onChange={e=>setNewFab(e.target.value)} placeholder="Nome do fabricante" style={{ flex:1, fontSize:12 }} />
+                <Btn variant="primary" style={{ fontSize:12, padding:'7px 12px' }} onClick={addFab}>Salvar</Btn>
+                <Btn variant="ghost"   style={{ fontSize:12, padding:'7px 10px' }} onClick={() => setShowFabForm(false)}>✕</Btn>
+              </div>
+              {/* Ficha toggle */}
+              <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
+                <label style={{ display:'flex', alignItems:'center', gap:7, cursor:'pointer', fontSize:12, color:'var(--ts)' }}>
+                  <div onClick={() => setFabHasFicha(v=>!v)} style={{
+                    width:36, height:20, borderRadius:999, position:'relative', cursor:'pointer',
+                    background: fabHasFicha ? 'var(--gr)' : 'var(--s3)',
+                    border:'1px solid var(--b2)', transition:'background .2s',
+                  }}>
+                    <div style={{
+                      position:'absolute', top:2, left: fabHasFicha ? 18 : 2,
+                      width:14, height:14, borderRadius:'50%', background:'#fff',
+                      transition:'left .2s', boxShadow:'0 1px 3px rgba(0,0,0,.3)',
+                    }} />
+                  </div>
+                  Possui ficha de garantia
+                </label>
+              </div>
+              {/* Custom audit fields */}
+              <div style={{ fontSize:11, color:'var(--tm)', marginBottom:4 }}>
+                Documentos adicionais na auditoria (separados por vírgula):
+              </div>
+              <input
+                value={fabAuditFields}
+                onChange={e=>setFabAuditFields(e.target.value)}
+                placeholder="Ex: Laudo técnico, Foto placa, Diagrama elétrico"
+                style={{ fontSize:11 }}
+              />
+              {fabAuditFields && (
+                <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginTop:6 }}>
+                  {fabAuditFields.split(',').map(s=>s.trim()).filter(Boolean).map((f,i) => (
+                    <span key={i} style={{ fontSize:10, background:'rgba(96,165,250,.1)', color:'var(--bl)', padding:'2px 8px', borderRadius:999 }}>{f}</span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           <div style={{ padding:'8px', minHeight:80 }}>
@@ -163,6 +207,7 @@ export function Produtos({ showToast, user }) {
             {selCat && (selCat.fabricantes||[]).length === 0 && <div style={{ textAlign:'center', color:'var(--tm)', padding:'28px 0', fontSize:13 }}>Nenhum fabricante cadastrado</div>}
             {(selCat?.fabricantes||[]).map(fab => {
               const count = casesByFab[fab.nome] || 0;
+              const hasFicha = fab.has_ficha !== false; // default true
               const maxF  = Math.max(...(selCat.fabricantes||[]).map(f=>casesByFab[f.nome]||0),1);
               return (
                 <div key={fab.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 10px', borderRadius:'var(--rs)', marginBottom:2 }}>

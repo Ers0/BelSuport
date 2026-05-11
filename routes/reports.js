@@ -2,6 +2,15 @@
 const express = require('express');
 const router  = express.Router();
 const { supabaseAdmin } = require('../services/db');
+
+// Graceful crypto for reports — decrypt before rendering
+let _crypto = null;
+try { _crypto = require('../services/crypto'); } catch (_) {}
+const masterKey = () => _crypto ? _crypto.getMasterKey() : null;
+const dec = (obj, fields) => _crypto && obj ? _crypto.decryptFields(obj, fields, masterKey()) : (obj || {});
+const decRows = (rows, fields) => _crypto && rows ? _crypto.decryptRows(rows, fields, masterKey()) : (rows || []);
+const EF_CASE = _crypto?.ENCRYPTED_FIELDS?.chamados || [];
+const EF_REM  = _crypto?.ENCRYPTED_FIELDS?.reminders || [];
 const { requirePermission } = require('../services/permissions');
 
 // Helper: check pdf_export_enabled toggle + permission
@@ -21,9 +30,10 @@ router.use(guardExport);
 // ── GET /api/reports/case/:id — HTML report (print to PDF via browser) ─────────
 router.get('/case/:id', async (req, res) => {
   try {
-    const { data: c, error } = await supabaseAdmin
+    const { data: cRaw, error } = await supabaseAdmin
       .from('chamados').select('*').eq('id', req.params.id).single();
     if (error) throw error;
+    const c = dec(cRaw, EF_CASE);
 
     const { data: events } = await supabaseAdmin
       .from('case_events').select('*')
@@ -478,9 +488,10 @@ router.get('/case/:id', async (req, res) => {
 // ── GET /api/reports/reminder/:id — HTML contact report ──────────────────────
 router.get('/reminder/:id', async (req, res) => {
   try {
-    const { data: r, error } = await supabaseAdmin
+    const { data: rRaw, error } = await supabaseAdmin
       .from('reminders').select('*').eq('id', req.params.id).single();
     if (error) throw error;
+    const r = dec(rRaw, EF_REM);
 
     const statusLabel = { pending:'Pendente', contacted:'Contactado', done:'Concluído' }[r.status] || r.status;
     const statusColor = { pending:'#d97706', contacted:'#2563eb', done:'#16a34a' }[r.status] || '#6b7280';
@@ -755,7 +766,7 @@ router.get('/dashboard', async (req, res) => {
     if (period === 'weekly')  fromDate.setDate(now.getDate() - 7);
     if (period === 'monthly') fromDate.setDate(now.getDate() - 30);
 
-    const { data: cases } = await supabaseAdmin
+    const { data: casesRaw } = await supabaseAdmin
       .from('chamados')
       .select('id,data,hora,status,fabricante,sn,integrador,cliente_final,nome,adb_number,created_at')
       .gte('created_at', fromDate.toISOString())
@@ -1034,453 +1045,6 @@ router.get('/solution/:id', async (req, res) => {
   } catch (err) {
     console.error('Solution report error:', err.message);
     if (!res.headersSent) res.status(500).json({ error: err.message });
-  }
-});
-
-
-// ── GET /api/reports/contact/:id — HTML contact attempt report ────────────────
-router.get('/contact/:id', async (req, res) => {
-  try {
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ','');
-    if (!token) return res.status(401).send('Unauthorized');
-
-    const { data: entity, error: eErr } = await supabaseAdmin
-      .from('contact_entities')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
-    if (eErr || !entity) return res.status(404).send('Contato não encontrado');
-
-    const { data: attempts } = await supabaseAdmin
-      .from('contact_attempts')
-      .select('*, chamado:chamados(id, sn, fabricante, integrador, cliente_final, status)')
-      .eq('entity_id', req.params.id)
-      .order('attempted_at', { ascending: false });
-
-    const RESULT_MAP = {
-      reached:      { icon:'✅', label:'Atendeu',        color:'#16a34a' },
-      no_answer:    { icon:'📵', label:'Não atendeu',    color:'#6B7694' },
-      busy:         { icon:'🔴', label:'Ocupado',         color:'#d97706' },
-      left_message: { icon:'📝', label:'Deixou recado',  color:'#2563eb' },
-      email_sent:   { icon:'📧', label:'Email enviado',  color:'#7c3aed' },
-      whatsapp:     { icon:'💬', label:'WhatsApp',       color:'#16a34a' },
-      other:        { icon:'📞', label:'Outro',          color:'#6B7694' },
-    };
-
-    // Stats
-    const stats = {};
-    (attempts||[]).forEach(a => { stats[a.result] = (stats[a.result]||0) + 1; });
-    const reached = stats['reached'] || 0;
-    const total   = (attempts||[]).length;
-    const lastAttempt = (attempts||[])[0];
-    const lastRes = lastAttempt ? RESULT_MAP[lastAttempt.result] : null;
-
-    const html = `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tentativas de Contato — ${entity.name}</title>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Plus Jakarta Sans', sans-serif; background: #f8f9fb; color: #111827; font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
-  .page { max-width: 720px; margin: 0 auto; padding: 0 0 60px; }
-  .header { background: #0C0E16; padding: 18px 28px; display: flex; align-items: center; justify-content: space-between; }
-  .header-logo { display: flex; align-items: center; gap: 10px; }
-  .logo-icon { width: 34px; height: 34px; background: linear-gradient(135deg, #FFD700, #FF8C00); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
-  .logo-text { color: #fff; font-size: 15px; font-weight: 800; letter-spacing: -.02em; }
-  .logo-sub  { color: #6B7694; font-size: 10px; font-weight: 500; }
-  .header-right { text-align: right; }
-  .header-title { color: #FFD700; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-  .header-date  { color: #6B7694; font-size: 10px; margin-top: 2px; }
-  .meta-strip { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 16px 28px; display: flex; gap: 28px; align-items: center; flex-wrap: wrap; }
-  .meta-item label { display: block; font-size: 9px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 3px; }
-  .meta-item span  { font-size: 13px; font-weight: 700; color: #111827; }
-  .cat-badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #f3f4f6; color: #374151; }
-  .section { background: #fff; border-radius: 10px; margin: 16px 28px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
-  .section-title { padding: 12px 18px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; font-size: 10px; font-weight: 800; color: #6b7280; text-transform: uppercase; letter-spacing: .09em; display: flex; align-items: center; gap: 7px; }
-  .section-body { padding: 16px 18px; }
-  .info-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  .info-item label { display: block; font-size: 9px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 3px; }
-  .info-item span  { font-size: 13px; font-weight: 600; color: #111827; }
-  .fab-contact-box { margin-top: 14px; padding: 12px 14px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; }
-  .fab-contact-box .label { font-size: 9px; font-weight: 800; color: #2563eb; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
-  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-  .stat-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 14px; text-align: center; }
-  .stat-card .val { font-size: 22px; font-weight: 800; color: #111827; }
-  .stat-card .lbl { font-size: 10px; color: #6b7280; margin-top: 2px; }
-  .result-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
-  .result-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .attempt { display: flex; gap: 14px; padding: 14px 18px; border-bottom: 1px solid #f3f4f6; align-items: flex-start; }
-  .attempt:last-child { border-bottom: none; }
-  .attempt-icon { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; margin-top: 2px; }
-  .attempt-meta { font-size: 10px; color: #9ca3af; margin-top: 2px; font-family: monospace; }
-  .attempt-result { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
-  .attempt-author { font-size: 11px; color: #6b7280; margin-bottom: 4px; }
-  .attempt-notes { font-size: 12px; color: #374151; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px 10px; margin-top: 6px; line-height: 1.5; }
-  .chamado-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; margin-top: 4px; }
-  .footer { display: flex; justify-content: space-between; align-items: center; padding: 14px 28px; border-top: 1px solid #e5e7eb; font-size: 10px; color: #9ca3af; margin-top: 8px; }
-  .print-btn { position: fixed; bottom: 24px; right: 24px; background: #FFD700; color: #000; border: none; padding: 12px 24px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; box-shadow: 0 4px 16px rgba(0,0,0,.15); }
-  @media print { .print-btn { display: none; } .page { padding-bottom: 0; } body { background: #fff; } }
-</style>
-</head>
-<body>
-<div class="page">
-
-  <!-- Header -->
-  <div class="header">
-    <div class="header-logo">
-      <div class="logo-icon">⚡</div>
-      <div>
-        <div class="logo-text">Belenergy</div>
-        <div class="logo-sub">Support Pro</div>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="header-title">Relatório de Contato</div>
-      <div class="header-date">Gerado em ${new Date().toLocaleString('pt-BR')}</div>
-    </div>
-  </div>
-
-  <!-- Meta strip -->
-  <div class="meta-strip">
-    <div class="meta-item">
-      <label>Nome</label>
-      <span>${entity.name}</span>
-    </div>
-    <div class="meta-item">
-      <label>Categoria</label>
-      <span><span class="cat-badge">${entity.category}</span></span>
-    </div>
-    ${entity.phone ? `<div class="meta-item"><label>Telefone</label><span>${entity.phone}</span></div>` : ''}
-    ${entity.email ? `<div class="meta-item"><label>Email</label><span>${entity.email}</span></div>` : ''}
-    <div class="meta-item">
-      <label>Total de Tentativas</label>
-      <span>${total}</span>
-    </div>
-    ${lastRes ? `<div class="meta-item"><label>Último Resultado</label><span style="color:${lastRes.color};font-weight:700">${lastRes.icon} ${lastRes.label}</span></div>` : ''}
-  </div>
-
-  ${entity.category === 'Fabricantes' && entity.fabricante_contact_name ? `
-  <!-- Fabricante contact -->
-  <div class="section">
-    <div class="section-title">👤 Contato no Fabricante</div>
-    <div class="section-body">
-      <div class="info-grid">
-        <div class="info-item"><label>Nome</label><span>${entity.fabricante_contact_name}</span></div>
-        ${entity.fabricante_contact_role ? `<div class="info-item"><label>Cargo</label><span>${entity.fabricante_contact_role}</span></div>` : ''}
-        ${entity.fabricante_contact_phone ? `<div class="info-item"><label>Tel. Direto</label><span>${entity.fabricante_contact_phone}</span></div>` : ''}
-      </div>
-    </div>
-  </div>` : ''}
-
-  ${entity.notes ? `
-  <!-- Notes -->
-  <div class="section">
-    <div class="section-title">📝 Observações</div>
-    <div class="section-body" style="color:#374151;line-height:1.6">${entity.notes}</div>
-  </div>` : ''}
-
-  <!-- Stats -->
-  <div class="section">
-    <div class="section-title">📊 Resumo das Tentativas</div>
-    <div class="section-body">
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="val">${total}</div>
-          <div class="lbl">Total</div>
-        </div>
-        <div class="stat-card">
-          <div class="val" style="color:#16a34a">${reached}</div>
-          <div class="lbl">Atendeu</div>
-        </div>
-        <div class="stat-card">
-          <div class="val" style="color:#d97706">${total - reached}</div>
-          <div class="lbl">Sem resposta</div>
-        </div>
-        <div class="stat-card">
-          <div class="val" style="color:#2563eb">${Math.round(total ? (reached/total)*100 : 0)}%</div>
-          <div class="lbl">Taxa de contato</div>
-        </div>
-      </div>
-      <div style="margin-top:14px;display:flex;gap:16px;flex-wrap:wrap">
-        ${Object.entries(stats).map(([key, count]) => {
-          const r = RESULT_MAP[key] || { icon:'📞', label:key, color:'#6B7694' };
-          return `<div class="result-row">
-            <div class="result-dot" style="background:${r.color}"></div>
-            <span style="font-size:11px;color:#374151">${r.icon} ${r.label}: <strong>${count}</strong></span>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>
-  </div>
-
-  <!-- Timeline -->
-  <div class="section">
-    <div class="section-title">🕐 Histórico de Tentativas (${total})</div>
-    ${total === 0 ? '<div class="section-body" style="color:#9ca3af;text-align:center;padding:24px 0">Nenhuma tentativa registrada</div>' : ''}
-    ${(attempts||[]).map((a, i) => {
-      const r   = RESULT_MAP[a.result] || RESULT_MAP.other;
-      const dt  = new Date(a.attempted_at);
-      const dateStr = dt.toLocaleDateString('pt-BR', { weekday:'short', day:'2-digit', month:'2-digit', year:'numeric' });
-      const timeStr = dt.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
-      return `
-      <div class="attempt">
-        <div class="attempt-icon" style="background:${r.color}18;border:1px solid ${r.color}30">${r.icon}</div>
-        <div style="flex:1;min-width:0">
-          <div class="attempt-result" style="color:${r.color}">${r.label}</div>
-          <div class="attempt-author">por ${a.author}</div>
-          <div class="attempt-meta">📅 ${dateStr} &nbsp;⏱ ${timeStr}</div>
-          ${a.chamado ? `<div class="chamado-tag">🔗 #${a.chamado.id} — ${a.chamado.sn||''} ${a.chamado.integrador||a.chamado.cliente_final||''} | ${a.chamado.status}</div>` : ''}
-          ${a.notes ? `<div class="attempt-notes">${a.notes}</div>` : ''}
-        </div>
-        <div style="font-size:11px;color:#9ca3af;white-space:nowrap;margin-top:2px">#${i+1}</div>
-      </div>`;
-    }).join('')}
-  </div>
-
-  <!-- Signature area -->
-  <div class="section">
-    <div class="section-title">✍️ Responsável</div>
-    <div class="section-body">
-      <div style="display:flex;gap:40px;margin-top:8px">
-        <div style="flex:1">
-          <div style="border-bottom:1px solid #d1d5db;margin-bottom:6px;height:40px"></div>
-          <div style="font-size:10px;color:#9ca3af;text-align:center">Técnico responsável</div>
-        </div>
-        <div style="flex:1">
-          <div style="border-bottom:1px solid #d1d5db;margin-bottom:6px;height:40px"></div>
-          <div style="font-size:10px;color:#9ca3af;text-align:center">Data</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="footer">
-    <span>Belenergy Support Pro — Relatório de Tentativas de Contato</span>
-    <span>Gerado em ${new Date().toLocaleString('pt-BR')}</span>
-  </div>
-
-</div>
-<button class="print-btn" onclick="window.print()">🖨️ Imprimir / Salvar PDF</button>
-</body>
-</html>`;
-
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(html);
-  } catch (err) {
-    console.error('Contact report error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
-// ── GET /api/reports/contact-session/:id — Per-session PDF ───────────────────
-router.get('/contact-session/:id', async (req, res) => {
-  try {
-    const { data: session, error: sErr } = await supabaseAdmin
-      .from('contact_sessions')
-      .select(`*, entity:contact_entities(*), chamado:chamados(id,sn,fabricante,integrador,cliente_final,status,relato), attempts:contact_attempts(*)`)
-      .eq('id', req.params.id)
-      .single();
-    if (sErr || !session) return res.status(404).send('Sessão não encontrada');
-
-    const attempts = (session.attempts||[]).sort((a,b) => new Date(b.attempted_at)-new Date(a.attempted_at));
-    const entity   = session.entity;
-
-    const RESULT_MAP = {
-      reached:      { icon:'✅', label:'Atendeu',        color:'#16a34a' },
-      no_answer:    { icon:'📵', label:'Não atendeu',    color:'#6B7694' },
-      busy:         { icon:'🔴', label:'Ocupado',         color:'#d97706' },
-      left_message: { icon:'📝', label:'Deixou recado',  color:'#2563eb' },
-      email_sent:   { icon:'📧', label:'Email enviado',  color:'#7c3aed' },
-      whatsapp:     { icon:'💬', label:'WhatsApp',       color:'#16a34a' },
-      other:        { icon:'📞', label:'Outro',          color:'#6B7694' },
-    };
-
-    const stats   = {};
-    attempts.forEach(a => { stats[a.result] = (stats[a.result]||0) + 1; });
-    const reached = stats['reached'] || 0;
-    const total   = attempts.length;
-    const lastRes = attempts[0] ? RESULT_MAP[attempts[0].result] : null;
-
-    const html = `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<title>Sessão de Contato — ${session.title}</title>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Plus Jakarta Sans', sans-serif; background: #f8f9fb; color: #111827; font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
-  .page { max-width: 720px; margin: 0 auto; padding: 0 0 60px; }
-  .header { background: #0C0E16; padding: 18px 28px; display: flex; align-items: center; justify-content: space-between; }
-  .header-logo { display: flex; align-items: center; gap: 10px; }
-  .logo-icon { width: 34px; height: 34px; background: linear-gradient(135deg, #FFD700, #FF8C00); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
-  .logo-text { color: #fff; font-size: 15px; font-weight: 800; }
-  .logo-sub  { color: #6B7694; font-size: 10px; }
-  .header-right { text-align: right; }
-  .header-title { color: #FFD700; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-  .header-date  { color: #6B7694; font-size: 10px; margin-top: 2px; }
-  .meta-strip { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 14px 28px; display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
-  .meta-item label { display: block; font-size: 9px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 3px; }
-  .meta-item span  { font-size: 13px; font-weight: 700; color: #111827; }
-  .session-title { background: #fffbeb; border-left: 4px solid #FFD700; padding: 12px 28px; font-size: 16px; font-weight: 800; color: #111827; display: flex; align-items: center; gap:10px; }
-  .section { background: #fff; border-radius: 10px; margin: 14px 28px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
-  .section-title { padding: 10px 18px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; font-size: 10px; font-weight: 800; color: #6b7280; text-transform: uppercase; letter-spacing: .09em; }
-  .section-body  { padding: 14px 18px; }
-  .stats-grid { display: grid; grid-template-columns: repeat(4,1fr); gap:10px; }
-  .stat-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; text-align: center; }
-  .stat-card .val { font-size: 22px; font-weight: 800; }
-  .stat-card .lbl { font-size: 10px; color: #6b7280; margin-top: 2px; }
-  .chamado-box { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px 14px; }
-  .chamado-box .clabel { font-size: 9px; font-weight: 800; color: #2563eb; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
-  .info-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
-  .info-item label { display: block; font-size: 9px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 2px; }
-  .info-item span  { font-size:12px; font-weight:600; color:#111827; }
-  .attempt { display: flex; gap: 12px; padding: 12px 18px; border-bottom: 1px solid #f3f4f6; align-items: flex-start; }
-  .attempt:last-child { border-bottom: none; }
-  .attempt-icon { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; margin-top:2px; }
-  .attempt-result { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
-  .attempt-meta   { font-size: 10px; color: #9ca3af; font-family: monospace; }
-  .attempt-author { font-size: 11px; color: #6b7280; margin-bottom: 3px; }
-  .attempt-notes  { font-size: 12px; color: #374151; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 7px 10px; margin-top: 6px; line-height: 1.5; }
-  .status-badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:10.5px; font-weight:700; }
-  .footer { display: flex; justify-content: space-between; padding: 12px 28px; border-top: 1px solid #e5e7eb; font-size: 10px; color: #9ca3af; margin-top: 8px; }
-  .print-btn { position: fixed; bottom: 24px; right: 24px; background: #FFD700; color: #000; border: none; padding: 12px 24px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; box-shadow: 0 4px 16px rgba(0,0,0,.15); }
-  @media print { .print-btn { display:none; } body { background:#fff; } .page { padding-bottom:0; } }
-</style>
-</head>
-<body>
-<div class="page">
-
-  <div class="header">
-    <div class="header-logo">
-      <div class="logo-icon">⚡</div>
-      <div><div class="logo-text">Belenergy</div><div class="logo-sub">Support Pro</div></div>
-    </div>
-    <div class="header-right">
-      <div class="header-title">Sessão de Contato</div>
-      <div class="header-date">Gerado em ${new Date().toLocaleString('pt-BR')}</div>
-    </div>
-  </div>
-
-  <!-- Session title bar -->
-  <div class="session-title">
-    📞 ${session.title}
-    <span class="status-badge" style="font-size:10px;background:${session.status==='open'?'#dcfce7':'#f3f4f6'};color:${session.status==='open'?'#16a34a':'#6b7280'};margin-left:auto">
-      ${session.status==='open'?'Em aberto':'Encerrada'}
-    </span>
-  </div>
-
-  <!-- Contact + meta -->
-  <div class="meta-strip">
-    <div class="meta-item"><label>Contato</label><span>${entity?.name||'—'}</span></div>
-    <div class="meta-item"><label>Categoria</label><span>${entity?.category||'—'}</span></div>
-    ${entity?.phone ? `<div class="meta-item"><label>Telefone</label><span>${entity.phone}</span></div>` : ''}
-    <div class="meta-item"><label>Total tentativas</label><span>${total}</span></div>
-    ${lastRes ? `<div class="meta-item"><label>Último resultado</label><span style="color:${lastRes.color};font-weight:700">${lastRes.icon} ${lastRes.label}</span></div>` : ''}
-    <div class="meta-item"><label>Criada em</label><span>${new Date(session.created_at).toLocaleDateString('pt-BR')}</span></div>
-  </div>
-
-  ${session.chamado ? `
-  <!-- Linked chamado -->
-  <div class="section">
-    <div class="section-title">🔗 Chamado Vinculado</div>
-    <div class="section-body">
-      <div class="chamado-box">
-        <div class="clabel">Protocolo #${session.chamado.id}</div>
-        <div class="info-grid">
-          <div class="info-item"><label>Cliente</label><span>${session.chamado.integrador||session.chamado.cliente_final||'—'}</span></div>
-          <div class="info-item"><label>S/N</label><span>${session.chamado.sn||'—'}</span></div>
-          <div class="info-item"><label>Fabricante</label><span>${session.chamado.fabricante||'—'}</span></div>
-          <div class="info-item"><label>Status</label><span>${session.chamado.status||'—'}</span></div>
-        </div>
-        ${session.chamado.relato ? `<div style="margin-top:10px;font-size:12px;color:#374151;background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px">${session.chamado.relato.slice(0,200)}${session.chamado.relato.length>200?'...':''}</div>` : ''}
-      </div>
-    </div>
-  </div>` : ''}
-
-  ${session.notes ? `
-  <div class="section">
-    <div class="section-title">📝 Observações da Sessão</div>
-    <div class="section-body" style="color:#374151;line-height:1.6">${session.notes}</div>
-  </div>` : ''}
-
-  <!-- Stats -->
-  <div class="section">
-    <div class="section-title">📊 Resumo</div>
-    <div class="section-body">
-      <div class="stats-grid">
-        <div class="stat-card"><div class="val">${total}</div><div class="lbl">Total</div></div>
-        <div class="stat-card"><div class="val" style="color:#16a34a">${reached}</div><div class="lbl">Atendeu</div></div>
-        <div class="stat-card"><div class="val" style="color:#d97706">${total-reached}</div><div class="lbl">Sem resposta</div></div>
-        <div class="stat-card"><div class="val" style="color:#2563eb">${Math.round(total?(reached/total)*100:0)}%</div><div class="lbl">Taxa contato</div></div>
-      </div>
-      <div style="margin-top:12px;display:flex;gap:14px;flex-wrap:wrap">
-        ${Object.entries(stats).map(([key,count]) => {
-          const r = RESULT_MAP[key]||RESULT_MAP.other;
-          return `<span style="font-size:11px;color:#374151">${r.icon} ${r.label}: <strong>${count}</strong></span>`;
-        }).join('')}
-      </div>
-    </div>
-  </div>
-
-  <!-- Attempts timeline -->
-  <div class="section">
-    <div class="section-title">🕐 Tentativas (${total})</div>
-    ${total===0?'<div style="padding:24px;text-align:center;color:#9ca3af">Nenhuma tentativa registrada</div>':''}
-    ${attempts.map((a,i) => {
-      const r   = RESULT_MAP[a.result]||RESULT_MAP.other;
-      const dt  = new Date(a.attempted_at);
-      const dateStr = dt.toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'2-digit',year:'numeric'});
-      const timeStr = dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-      return `
-      <div class="attempt">
-        <div class="attempt-icon" style="background:${r.color}18;border:1px solid ${r.color}30">${r.icon}</div>
-        <div style="flex:1;min-width:0">
-          <div class="attempt-result" style="color:${r.color}">${r.label}</div>
-          <div class="attempt-author">por ${a.author}</div>
-          <div class="attempt-meta">📅 ${dateStr} &nbsp;⏱ ${timeStr}</div>
-          ${a.notes?`<div class="attempt-notes">${a.notes}</div>`:''}
-          ${(a.metadata?.attachments||[]).length > 0 ? `
-          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">
-            ${(a.metadata.attachments||[]).map(att => `
-              <a href="${att.url}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:#2563eb;font-weight:600;text-decoration:none;background:#eff6ff;border:1px solid #bfdbfe;padding:2px 8px;border-radius:999px">
-                📎 ${att.name}
-              </a>`).join('')}
-          </div>` : ''}
-        </div>
-        <div style="font-size:11px;color:#9ca3af;white-space:nowrap;margin-top:2px">#${i+1}</div>
-      </div>`;
-    }).join('')}
-  </div>
-
-  <!-- Signature -->
-  <div class="section">
-    <div class="section-title">✍️ Responsável</div>
-    <div class="section-body">
-      <div style="display:flex;gap:40px;margin-top:8px">
-        <div style="flex:1"><div style="border-bottom:1px solid #d1d5db;height:40px;margin-bottom:6px"></div><div style="font-size:10px;color:#9ca3af;text-align:center">Técnico responsável</div></div>
-        <div style="flex:1"><div style="border-bottom:1px solid #d1d5db;height:40px;margin-bottom:6px"></div><div style="font-size:10px;color:#9ca3af;text-align:center">Data</div></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="footer">
-    <span>Belenergy Support Pro — Sessão de Contato: ${session.title}</span>
-    <span>Gerado em ${new Date().toLocaleString('pt-BR')}</span>
-  </div>
-</div>
-<button class="print-btn" onclick="window.print()">🖨️ Imprimir / Salvar PDF</button>
-</body></html>`;
-
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(html);
-  } catch (err) {
-    console.error('Contact session report error:', err.message);
-    res.status(500).json({ error: err.message });
   }
 });
 

@@ -205,4 +205,67 @@ Seja direto e técnico. Mencione códigos de alarme específicos quando relevant
   }
 });
 
+
+// ── POST /api/analysis/rag — Full RAG pipeline ───────────────────────────────
+router.post('/rag', async (req, res) => {
+  try {
+    if (!_ragQuery) return res.status(503).json({ error: 'RAG service not available — check services/rag.js' });
+    const { userMessage, fabricante, modelo, categoria, sn, relato, alarmCode, ocrText, brand } = req.body;
+    if (!userMessage && !relato && !alarmCode && !ocrText)
+      return res.status(400).json({ error: 'Forneca userMessage, relato ou alarmCode' });
+    const query = _buildQuery({ userMessage, fabricante, modelo, categoria, sn, relato, alarmCode, ocrText });
+    const result = await _ragQuery(query, { brand: brand || fabricante, fabricante });
+    return res.json(result);
+  } catch (err) {
+    console.error('[RAG route] error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/analysis/suggest-title ─────────────────────────────────────────
+router.post('/suggest-title', async (req, res) => {
+  try {
+    const { content, fabricante, categoria } = req.body;
+    if (!content) return res.status(400).json({ error: 'content obrigatorio' });
+    const GROQ_KEY = process.env.GROQ_API_KEY;
+    if (!GROQ_KEY) return res.status(400).json({ error: 'GROQ_API_KEY nao configurada' });
+    const prompt = 'Crie um titulo conciso (max 80 chars) para esta solucao tecnica de energia solar.\n' +
+      (fabricante ? 'Fabricante: ' + fabricante + '\n' : '') +
+      (categoria  ? 'Categoria: '  + categoria  + '\n' : '') +
+      'Conteudo:\n' + content.slice(0, 500) +
+      '\n\nRetorne APENAS o titulo, sem aspas.';
+    const fetch = (await import('node-fetch')).default;
+    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + GROQ_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'llama-3.1-8b-instant', max_tokens: 60, temperature: 0.4,
+        messages: [{ role: 'user', content: prompt }] }),
+    });
+    const data = await r.json();
+    return res.json({ title: (data.choices?.[0]?.message?.content || '').trim() });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/analysis/reindex — rebuild embeddings for solutions without one ─
+router.post('/reindex', async (req, res) => {
+  try {
+    if (!_ragQuery) return res.status(503).json({ error: 'RAG not available' });
+    const { embed } = require('../services/rag');
+    const { data: missing } = await supabaseAdmin.from('solutions').select('id,title,content,brand,tags').is('embedding', null).order('id');
+    if (!missing?.length) return res.json({ message: 'Todas as solucoes ja tem embedding.', indexed: 0 });
+    let indexed = 0, failed = 0;
+    for (const sol of missing) {
+      try {
+        const text = [sol.title, sol.brand ? 'Marca: ' + sol.brand : '', (sol.tags||[]).join(' '), (sol.content||'').slice(0,800)].filter(Boolean).join('. ');
+        const vec = await embed(text);
+        if (!vec) { failed++; continue; }
+        await supabaseAdmin.from('solutions').update({ embedding: vec }).eq('id', sol.id);
+        indexed++;
+        await new Promise(r => setTimeout(r, 100));
+      } catch { failed++; }
+    }
+    return res.json({ message: indexed + ' indexadas, ' + failed + ' com falha.', indexed, failed });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;

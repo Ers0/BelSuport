@@ -799,7 +799,7 @@ function CaseListTabs({
 export default function Registro({
   showToast, selectedFolder, folderPath, setFolderPath,
   allProducts, editCase, setEditCase, onRefresh,
-  driveProgress, setDriveProgress, user, onNavigate,
+  driveProgress, setDriveProgress, user, onNavigate, onFolderChange,
 }) {
   const [form, setForm]   = useState(emptyForm());
   const [step, setStep]   = useState(1);
@@ -1093,22 +1093,33 @@ export default function Registro({
 
   async function rapidAudit() {
     try {
-      // Get latest AGUARDANDO folder
+      showToast('⚡ Buscando última pasta...', 'info', 2000);
+
+      // Get folders — sorted reverse chronological, so first AGUARDANDO is newest
       const folders = await api('/api/files/folders').catch(() => ({ organized:[] }));
-      const aguardando = (folders.organized||[]).find(f => f.startsWith('AGUARDANDO'));
-      if (!aguardando) return showToast('Nenhuma pasta AGUARDANDO encontrada', 'warn');
+      const aguardandoList = (folders.organized||[]).filter(f => f.startsWith('AGUARDANDO'));
+      if (!aguardandoList.length) return showToast('Nenhuma pasta AGUARDANDO encontrada', 'warn');
+      const aguardando = aguardandoList[0]; // first = latest (API returns reverse sorted)
 
       showToast(`⚡ Auditoria rápida: ${aguardando}`, 'info', 3000);
 
-      // Set folder path directly (selectedFolder lives in App, we work with folderPath)
-      const auditRes = await api('/api/files/audit', { method:'POST', body: JSON.stringify({ folderName: aguardando }) }).catch(() => null);
-      const folderPath = auditRes?.folderPath;
-      if (!folderPath) return showToast('Erro ao acessar pasta', 'warn');
+      // 1. Register audit folder (sets edit_mode.tmp)
+      const auditRes = await api('/api/files/audit', {
+        method: 'POST',
+        body: JSON.stringify({ folderName: aguardando })
+      }).catch(() => null);
+      const fp = auditRes?.folderPath;
+      if (!fp) return showToast('Erro ao acessar pasta — verifique se o servidor local está rodando', 'warn');
 
-      setFolderPath(folderPath);
+      // 2. Update both folderPath (for this component) and selectedFolder (for sidebar)
+      setFolderPath(fp);
+      onFolderChange?.(aguardando); // update App-level selectedFolder + sidebar
 
-      // Auto-scan vision (label reading)
-      const vision = await api('/api/vision/autoscan-folder', { method:'POST', body: JSON.stringify({ folderPath }) }).catch(() => null);
+      // 3. Vision autoscan — read label
+      const vision = await api('/api/vision/autoscan-folder', {
+        method: 'POST',
+        body: JSON.stringify({ folderPath: fp })
+      }).catch(() => null);
       if (vision?.isLabel) {
         setForm(f => ({
           ...f,
@@ -1117,22 +1128,26 @@ export default function Registro({
           sn:         vision.sn         || f.sn,
           modelo:     vision.modelo     || f.modelo,
         }));
+        showToast(`🔍 Etiqueta lida: ${vision.fabricante || ''} ${vision.sn || ''}`, 'info', 3000);
       }
 
-      // Auto-extract VEN
-      const venRes = await api('/api/files/ven', { method:'POST', body: JSON.stringify({ folderPath }) }).catch(() => null);
-      if (venRes?.ven && venRes.ven !== '---') setVen(venRes.ven);
+      // 4. VEN extraction
+      const venRes = await api('/api/files/ven', {
+        method: 'POST',
+        body: JSON.stringify({ folderPath: fp })
+      }).catch(() => null);
+      if (venRes?.ven && venRes.ven !== '---' && venRes.ven !== '⚠️ VEN NAO LOCALIZADO') {
+        setVen(venRes.ven);
+      }
 
-      // Jump to step 2 if we're on step 1
-      if (step === 1) { setStep(2); setMaxReached(m => Math.max(m, 2)); }
-
-      showToast('✅ Auditoria rápida concluída — verifique os campos!', 'info', 4000);
+      // 5. Jump to step 2
+      setStep(2); setMaxReached(m => Math.max(m, 2));
+      showToast('✅ Pasta selecionada — verifique os campos e avance!', 'info', 4000);
     } catch(e) { showToast('❌ Auditoria rápida: ' + e.message, 'warn'); }
   }
 
   async function savePending() {
-    const destName = `${form.integrador||form.cliente_final||form.nome||'Cliente'}_${form.sn||Date.now()}`.replace(/[\\/:*?"<>|]/g,'_');
-    // Resolve categoria ID → name
+    const destName = `${form.integrador||form.cliente_final||form.nome||'Cliente'}_${form.sn||Date.now()}`.replace(/[/\\:*?"<>|]/g,'_');
     const catVal = form.categoria;
     const catResolved = (catVal && /^\d+$/.test(String(catVal)))
       ? (cats.find(c => String(c.id) === String(catVal))?.nome || catVal)
@@ -1141,14 +1156,18 @@ export default function Registro({
     if ('f_vcc' in payload) { payload.v_cc = payload.f_vcc?1:0; delete payload.f_vcc; }
     if ('f_vca' in payload) { payload.v_ca = payload.f_vca?1:0; delete payload.f_vca; }
     try {
-      const name = selectedFolder?.replace(/^📌 /,'') || '';
-      await api('/api/files/move-to-pending', { method:'POST', body: JSON.stringify({ folderName:name, newFolderName:destName }) });
+      const isCloud = window.location.hostname !== 'localhost';
+      // Local mode: also move the folder to PENDENTES
+      if (!isCloud && selectedFolder && selectedFolder !== 'Nenhuma') {
+        const name = selectedFolder.replace(/^📌 /,'');
+        await api('/api/files/move-to-pending', { method:'POST', body: JSON.stringify({ folderName:name, newFolderName:destName }) }).catch(() => {});
+      }
       let result;
       if (editCase?.id) result = await api(`/api/cases/${editCase.id}`, { method:'PUT', body: JSON.stringify(payload) });
       else result = await api('/api/cases', { method:'POST', body: JSON.stringify(payload) });
       if (result?.id) setSavedCaseId(result.id);
       showToast('💾 Salvo em Pendentes!');
-      resetWizard(); onRefresh?.();
+      resetWizard(); loadLists(); onRefresh?.();
     } catch(e) { showToast('Erro: ' + e.message, 'warn'); }
   }
 
@@ -1213,15 +1232,15 @@ export default function Registro({
 
       // 2. Auto-create Jira — pass full case data + caseId so jira.js has everything
       setDriveProgress({ visible:true, step:'Finalizando...', pct:98 });
+      let jiraResult = null;
       try {
-        // TEL field: use contato (WhatsApp) if available, else tel_integrador (#2 Jira TEL fix)
         const jiraPayload = {
           ...form,
           id:      newCaseId,
           drive_id: driveResult?.driveId,
           contato: form.contato || form.tel_integrador || '',
         };
-        const jiraResult = await api('/api/jira/create-issue', {
+        jiraResult = await api('/api/jira/create-issue', {
           method: 'POST',
           body:   JSON.stringify(jiraPayload),
         });
@@ -1303,9 +1322,11 @@ export default function Registro({
                 📎 Visualizar arquivos
               </span>
             )}
-            {editCase && (
-              <button onClick={resetWizard} style={{ background:'none', border:'none', color:'var(--re)', cursor:'pointer', fontSize:11.5, fontFamily:'inherit' }}>🗑 Limpar formulário</button>
-            )}
+            <button onClick={() => { if (confirm('Limpar todos os campos?')) resetWizard(); }}
+              title="Limpar formulário"
+              style={{ background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.2)', color:'var(--re)', cursor:'pointer', fontSize:13, padding:'7px 10px', borderRadius:'var(--rs)', lineHeight:1, fontFamily:'inherit' }}>
+              🗑
+            </button>
           </div>
         </div>
 

@@ -103,12 +103,52 @@ function MiniCalendar({ year, month, reminders, selectedDate, onSelectDate, onMo
 }
 
 // ── Reminder card ─────────────────────────────────────────────────────────────
-function ReminderCard({ r, onEdit, onDelete, onStatusChange }) {
+function ReminderCard({ r, onEdit, onDelete, onStatusChange, showAuthor, onCommentAdded, showToast, currentUser }) {
   const days    = daysUntil(r.return_date);
   const st      = STATUS_CFG[r.status] || STATUS_CFG.pending;
   const pr      = PRIORITY_CFG[r.priority] || PRIORITY_CFG.normal;
   const isOverdue = r.return_date && days < 0 && r.status === 'pending';
   const isToday   = days === 0 && r.status === 'pending';
+  const [showComments, setShowComments] = useState(false);
+  const [newComment, setNewComment]     = useState('');
+  // Local comments — optimistic, never reset by parent re-renders
+  const [localComments, setLocalComments] = useState(() => Array.isArray(r.comments) ? r.comments : []);
+  const comments = localComments;
+  const didOptimisticUpdate = React.useRef(false);
+  const mountedId = React.useRef(r.id);
+  useEffect(() => {
+    // Only sync from parent when the card ID changes (switched reminder)
+    if (mountedId.current !== r.id) {
+      mountedId.current = r.id;
+      didOptimisticUpdate.current = false;
+      setLocalComments(Array.isArray(r.comments) ? r.comments : []);
+    } else if (!didOptimisticUpdate.current && Array.isArray(r.comments)) {
+      // First load for this card — sync initial data
+      setLocalComments(r.comments);
+    }
+  }, [r.id]);
+
+  async function addComment() {
+    if (!newComment.trim()) return;
+    const newEntry = {
+      text:   newComment.trim(),
+      author: currentUser?.name?.split(' ')[0] || currentUser?.email?.split('@')[0] || 'Técnico',
+      at:     new Date().toISOString(),
+    };
+    const updated = [...localComments, newEntry];
+    // Update local state immediately — no refresh needed
+    didOptimisticUpdate.current = true;
+    setLocalComments(updated);
+    setNewComment('');
+    try {
+      await api(`/api/reminders/${r.id}`, { method:'PUT', body: JSON.stringify({ comments: updated }) });
+      onCommentAdded?.(); // sync parent in background (won't reset local state)
+    } catch(e) {
+      // Rollback on error
+      setLocalComments(prev => prev.filter(c => c !== newEntry));
+      showToast?.('Erro ao salvar comentário', 'warn');
+    }
+  }
 
   const urgencyBorder = isOverdue ? 'rgba(239,68,68,.4)'
     : isToday ? 'rgba(255,215,0,.4)' : 'var(--b1)';
@@ -145,6 +185,34 @@ function ReminderCard({ r, onEdit, onDelete, onStatusChange }) {
               {r.note}
             </div>
           )}
+
+          {/* Author tag for admin/master — shown always when canViewAll */}
+          {showAuthor && (
+            <div style={{ marginTop:5 }}>
+              <span style={{ fontSize:10, fontWeight:700,
+                background: r._userName ? 'rgba(167,139,250,.12)' : 'rgba(107,118,148,.1)',
+                color: r._userName ? 'var(--pu)' : 'var(--tm)',
+                border: `1px solid ${r._userName ? 'rgba(167,139,250,.25)' : 'rgba(107,118,148,.2)'}`,
+                padding:'2px 9px', borderRadius:999, display:'inline-flex', alignItems:'center', gap:4 }}>
+                👤 {r._userName || 'Técnico'}
+              </span>
+            </div>
+          )}
+
+          {/* Comments */}
+          {comments.length > 0 && (
+            <div style={{ marginTop:6 }}>
+              {comments.map((c, i) => (
+                <div key={i} style={{ display:'flex', gap:6, padding:'4px 0', borderTop:'1px solid var(--b1)', marginTop:i===0?4:0 }}>
+                  <div style={{ flex:1 }}>
+                    <span style={{ fontSize:11, fontWeight:600, color:'var(--ts)' }}>{c.author} </span>
+                    <span style={{ fontSize:10.5, color:'var(--tm)' }}>{new Date(c.at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</span>
+                    <div style={{ fontSize:12, color:'var(--ts)', marginTop:2 }}>{c.text}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Actions */}
@@ -164,8 +232,31 @@ function ReminderCard({ r, onEdit, onDelete, onStatusChange }) {
             onMouseEnter={e=>e.currentTarget.style.color='var(--re)'}
             onMouseLeave={e=>e.currentTarget.style.color='var(--tm)'}
           >✕</button>
+          <button onClick={() => setShowComments(v=>!v)} title="Comentários"
+            style={{ background: showComments ? 'rgba(255,215,0,.1)' : 'var(--s2)', border:`1px solid ${showComments?'rgba(255,215,0,.3)':'var(--b2)'}`, borderRadius:6, color: showComments ? 'var(--y)' : 'var(--tm)', cursor:'pointer', fontSize:12, padding:'5px 8px', position:'relative' }}>
+            💬{comments.length > 0 && <span style={{ position:'absolute', top:-4, right:-4, background:'var(--y)', color:'#000', fontSize:8, fontWeight:800, width:14, height:14, borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center' }}>{comments.length}</span>}
+          </button>
         </div>
       </div>
+
+      {/* Comment input */}
+      {showComments && (
+        <div style={{ marginTop:8, paddingTop:8, borderTop:'1px solid var(--b1)' }}>
+          <div style={{ fontSize:10, fontWeight:700, color:'var(--tm)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:6 }}>💬 Comentários</div>
+          <div style={{ display:'flex', gap:6 }}>
+            <input
+              value={newComment}
+              onChange={e => setNewComment(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addComment()}
+              placeholder="Adicionar comentário..."
+              style={{ flex:1, fontSize:12 }}
+            />
+            <button onClick={addComment} style={{ background:'var(--y)', border:'none', color:'#000', fontWeight:700, fontSize:11, padding:'6px 12px', borderRadius:'var(--rs)', cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}>
+              Enviar
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Status actions */}
       {r.status !== 'done' && (
@@ -233,616 +324,11 @@ function QuickForm({ initial, onSave, onCancel }) {
 }
 
 // ── Main Agenda view ──────────────────────────────────────────────────────────
-const CATEGORIES = ['Clientes','Fabricantes','Integradores','Fornecedores','Outros'];
-
-const RESULT_MAP = {
-  reached:      { label:'Atendeu',         color:'var(--gr)',  icon:'✅' },
-  no_answer:    { label:'Não atendeu',     color:'var(--tm)',  icon:'📵' },
-  busy:         { label:'Ocupado',          color:'#F59E0B',   icon:'🔴' },
-  left_message: { label:'Deixou recado',   color:'var(--bl)',  icon:'📝' },
-  email_sent:   { label:'Email enviado',   color:'var(--pu)',  icon:'📧' },
-  whatsapp:     { label:'WhatsApp',        color:'var(--gr)',  icon:'💬' },
-  other:        { label:'Outro',           color:'var(--tm)',  icon:'📞' },
-};
-
-// ── Tentativas de Contato Tab ─────────────────────────────────────────────────
-
-// ── Contacts Mini Calendar ─────────────────────────────────────────────────────
-function ContactsCalendar({ attempts, onDayClick }) {
+export default function Agenda({ showToast, user }) {
   const now = new Date();
-  const [year, setYear]   = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth());
-  const [dayView, setDayView] = useState(null);
-  const [dayPopRef] = useState(() => ({ current: null }));
-
-  // Build a map of date → attempts
-  const attemptsByDay = {};
-  (attempts||[]).forEach(a => {
-    const d = new Date(a.attempted_at).toLocaleDateString('pt-BR');
-    if (!attemptsByDay[d]) attemptsByDay[d] = [];
-    attemptsByDay[d].push(a);
-  });
-
-  const firstDay = new Date(year, month, 1).getDay();
-  const daysIn   = new Date(year, month + 1, 0).getDate();
-  const cells    = Array(firstDay).fill(null).concat(Array.from({ length: daysIn }, (_, i) => i + 1));
-  while (cells.length % 7 !== 0) cells.push(null);
-
-  const MONTHS = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-  const DAYS   = ['D','S','T','Q','Q','S','S'];
-
-  function cellDate(day) {
-    return new Date(year, month, day).toLocaleDateString('pt-BR');
-  }
-
-  return (
-    <div style={{ position:'relative' }}>
-      {/* Calendar header */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
-        <button onClick={() => { if (month===0){setMonth(11);setYear(y=>y-1);}else setMonth(m=>m-1); }} style={{ background:'none', border:'none', color:'var(--tm)', cursor:'pointer', fontSize:14, fontFamily:'inherit' }}>‹</button>
-        <div style={{ fontSize:11.5, fontWeight:700, color:'var(--tx)' }}>{MONTHS[month]} {year}</div>
-        <button onClick={() => { if (month===11){setMonth(0);setYear(y=>y+1);}else setMonth(m=>m+1); }} style={{ background:'none', border:'none', color:'var(--tm)', cursor:'pointer', fontSize:14, fontFamily:'inherit' }}>›</button>
-      </div>
-
-      {/* Day headers */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:2, marginBottom:4 }}>
-        {DAYS.map((d,i) => <div key={i} style={{ textAlign:'center', fontSize:9, fontWeight:700, color:'var(--tm)', padding:'2px 0' }}>{d}</div>)}
-      </div>
-
-      {/* Day cells */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:2 }}>
-        {cells.map((day, i) => {
-          if (!day) return <div key={i} />;
-          const dateStr  = cellDate(day);
-          const dayAtts  = attemptsByDay[dateStr] || [];
-          const isToday  = dateStr === now.toLocaleDateString('pt-BR');
-          const hasAtts  = dayAtts.length > 0;
-          const isActive = dayView === dateStr;
-          return (
-            <div key={i} onClick={() => hasAtts && setDayView(isActive ? null : dateStr)}
-              style={{
-                textAlign:'center', padding:'4px 2px', borderRadius:6, cursor: hasAtts ? 'pointer' : 'default',
-                background: isActive ? 'rgba(255,215,0,.15)' : isToday ? 'rgba(255,215,0,.06)' : 'transparent',
-                border: `1px solid ${isActive ? 'rgba(255,215,0,.4)' : isToday ? 'rgba(255,215,0,.2)' : 'transparent'}`,
-                position:'relative',
-              }}>
-              <div style={{ fontSize:11, fontWeight: isToday ? 800 : 400, color: isToday ? 'var(--y)' : 'var(--ts)' }}>{day}</div>
-              {hasAtts && (
-                <div style={{ display:'flex', justifyContent:'center', gap:2, marginTop:1 }}>
-                  {dayAtts.slice(0,3).map((a, ai) => (
-                    <div key={ai} style={{ width:4, height:4, borderRadius:'50%',
-                      background: RESULT_MAP[a.result]?.color || 'var(--tm)' }} />
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Day popup */}
-      {dayView && attemptsByDay[dayView] && (
-        <div ref={el => dayPopRef.current = el} style={{
-          position:'absolute', top:'100%', left:0, right:0, zIndex:9999,
-          background:'var(--s1)', border:'1px solid var(--b2)', borderRadius:'var(--rs)',
-          boxShadow:'0 8px 32px rgba(0,0,0,.6)', padding:12, marginTop:4,
-        }}>
-          <div style={{ fontSize:11, fontWeight:700, color:'var(--tm)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:8 }}>
-            {dayView}
-          </div>
-          {attemptsByDay[dayView].map((a, i) => {
-            const res = RESULT_MAP[a.result]||RESULT_MAP.other;
-            const t   = new Date(a.attempted_at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit', timeZone:'America/Sao_Paulo'});
-            return (
-              <div key={i} style={{ padding:'7px 0', borderBottom:'1px solid var(--b1)' }}>
-                {/* Entity + session header */}
-                <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:3 }}>
-                  <span style={{ fontSize:12 }}>{res.icon}</span>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:12, fontWeight:700, color:'var(--tx)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                      {a._entityName || '—'}
-                    </div>
-                    <div style={{ fontSize:10.5, color:'var(--tm)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                      {a._sessionTitle && <span>📂 {a._sessionTitle}</span>}
-                      {a._chamadoId && <span style={{ marginLeft:6, color:'var(--bl)', fontWeight:600 }}>🔗 #{a._chamadoId}</span>}
-                    </div>
-                  </div>
-                  <span style={{ fontSize:10, fontWeight:700, color:res.color, flexShrink:0 }}>{res.label}</span>
-                </div>
-                <div style={{ fontSize:10, color:'var(--tm)', fontFamily:'monospace', marginBottom: a.notes ? 3 : 0 }}>
-                  ⏱ {t} · {a.author}
-                </div>
-                {a.notes && <div style={{ fontSize:11, color:'var(--ts)', background:'var(--s2)', padding:'3px 7px', borderRadius:4 }}>{a.notes.slice(0,80)}{a.notes.length>80?'...':''}</div>}
-              </div>
-            );
-          })}
-          <button onClick={() => setDayView(null)} style={{ marginTop:8, background:'none', border:'none', color:'var(--tm)', fontSize:11, cursor:'pointer', fontFamily:'inherit' }}>Fechar</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ContactsTab({ showToast }) {
-  const [entities, setEntities]       = useState([]);
-  const [selected, setSelected]       = useState(null);
-  const [sessions, setSessions]       = useState([]);
-  const [selSession, setSelSession]   = useState(null);
-  const [attempts, setAttempts]       = useState([]);
-  const [cases, setCases]             = useState([]);
-  const [catFilter, setCatFilter]     = useState('');
-  const [search, setSearch]           = useState('');
-  const [globalSearch, setGlobalSearch] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [searching, setSearching]     = useState(false);
-  const [showNewEntity, setShowNewEntity]   = useState(false);
-  const [showNewSession, setShowNewSession] = useState(false);
-  const [showNewAttempt, setShowNewAttempt] = useState(false);
-  const [entityForm, setEntityForm] = useState({ category:'Clientes', name:'', phone:'', email:'', fabricante_contact_name:'', fabricante_contact_role:'', fabricante_contact_phone:'', notes:'' });
-  const [sessionForm, setSessionForm] = useState({ title:'', chamado_id:'', notes:'' });
-  const [attemptForm, setAttemptForm] = useState(() => {
-    // Get current time in São Paulo timezone for the datetime-local input
-    const now = new Date();
-    const spTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-    const pad = n => String(n).padStart(2,'0');
-    const local = `${spTime.getFullYear()}-${pad(spTime.getMonth()+1)}-${pad(spTime.getDate())}T${pad(spTime.getHours())}:${pad(spTime.getMinutes())}`;
-    return { result:'no_answer', notes:'', attempted_at: local };
-  });
-
-  const runGlobalSearch = async (term) => {
-    if (term.length < 2) { setSearchResults([]); return; }
-    setSearching(true);
-    const data = await api(`/api/contacts/search?q=${encodeURIComponent(term)}`).catch(() => []);
-    setSearchResults(data);
-    setSearching(false);
-  };
-
-  const loadEntities = async () => {
-    const params = new URLSearchParams();
-    if (catFilter) params.set('category', catFilter);
-    if (search) params.set('q', search);
-    const data = await api(`/api/contacts?${params}`).catch(() => []);
-    setEntities(data);
-  };
-  const loadSessions = async (entityId) => {
-    const data = await api(`/api/contacts/${entityId}/sessions`).catch(() => []);
-    setSessions(data);
-  };
-  const loadAttempts = async (sessionId) => {
-    const data = await api(`/api/contacts/sessions/${sessionId}/attempts`).catch(() => []);
-    setAttempts(data);
-  };
-  const loadCases = async () => {
-    const data = await api('/api/cases').catch(() => []);
-    setCases(data);
-  };
-
-  useEffect(() => { loadEntities(); loadCases(); }, [catFilter, search]);
-
-  function selectEntity(e) {
-    setSelected(e); setSelSession(null); setAttempts([]);
-    setShowNewSession(false); setShowNewAttempt(false);
-    loadSessions(e.id);
-  }
-  function selectSession(s) {
-    setSelSession(s); setShowNewAttempt(false);
-    loadAttempts(s.id);
-  }
-
-  const setE = (k,v) => setEntityForm(f=>({...f,[k]:v}));
-  const setS = (k,v) => setSessionForm(f=>({...f,[k]:v}));
-  const setA = (k,v) => setAttemptForm(f=>({...f,[k]:v}));
-
-  async function saveEntity() {
-    if (!entityForm.name) return showToast('Nome obrigatório','warn');
-    try {
-      await api('/api/contacts', { method:'POST', body: JSON.stringify(entityForm) });
-      showToast('✅ Contato adicionado!');
-      setShowNewEntity(false);
-      setEntityForm({ category:'Clientes', name:'', phone:'', email:'', fabricante_contact_name:'', fabricante_contact_role:'', fabricante_contact_phone:'', notes:'' });
-      loadEntities();
-    } catch(e) { showToast('❌ '+e.message,'warn'); }
-  }
-
-  async function saveSession() {
-    if (!sessionForm.title) return showToast('Título obrigatório','warn');
-    try {
-      const res = await api(`/api/contacts/${selected.id}/sessions`, { method:'POST', body: JSON.stringify({ ...sessionForm, chamado_id: sessionForm.chamado_id||null }) });
-      showToast('✅ Sessão criada!');
-      setShowNewSession(false);
-      setSessionForm({ title:'', chamado_id:'', notes:'' });
-      loadSessions(selected.id);
-      loadEntities();
-      selectSession(res);
-    } catch(e) { showToast('❌ '+e.message,'warn'); }
-  }
-
-  async function saveAttempt() {
-    if (!selSession) return;
-    try {
-      await api(`/api/contacts/sessions/${selSession.id}/attempts`, { method:'POST', body: JSON.stringify({ ...attemptForm, attempted_at: new Date(attemptForm.attempted_at).toISOString() }) });
-      showToast('✅ Tentativa registrada!');
-      setShowNewAttempt(false);
-      setAttemptForm({ result:'no_answer', notes:'', attempted_at: new Date().toISOString().slice(0,16) });
-      loadAttempts(selSession.id);
-      loadSessions(selected.id);
-      loadEntities();
-    } catch(e) { showToast('❌ '+e.message,'warn'); }
-  }
-
-  async function closeSession(id) {
-    await api(`/api/contacts/sessions/${id}`, { method:'PUT', body: JSON.stringify({ status:'closed' }) });
-    loadSessions(selected.id);
-    if (selSession?.id === id) setSelSession(s => ({...s, status:'closed'}));
-    showToast('Sessão encerrada');
-  }
-
-  async function deleteAttempt(id) {
-    if (!confirm('Remover?')) return;
-    await api(`/api/contacts/attempts/${id}`, { method:'DELETE' });
-    loadAttempts(selSession.id);
-  }
-
-  const token = localStorage.getItem('session_token');
-
-  // Total attempts across all sessions for an entity
-  const entityAttemptCount = (e) => (e.sessions||[]).reduce((s,ss) => s+(ss.attempts||[]).length, 0);
-  const entityLastResult = (e) => {
-    const all = (e.sessions||[]).flatMap(ss => ss.attempts||[]).sort((a,b)=>new Date(b.attempted_at)-new Date(a.attempted_at));
-    return all[0] ? RESULT_MAP[all[0].result] : null;
-  };
-
-  const filtered = entities.filter(e =>
-    (!search || e.name.toLowerCase().includes(search.toLowerCase())) &&
-    (!catFilter || e.category === catFilter)
-  );
-
-  return (
-    <div style={{ display:'grid', gridTemplateColumns:'260px 260px 1fr', gap:12, alignItems:'start' }}>
-
-      {/* Col 1 — Contacts */}
-      <div>
-        {/* Global search */}
-        <div style={{ position:'relative', marginBottom:8 }}>
-          <input
-            value={globalSearch}
-            onChange={e => { setGlobalSearch(e.target.value); runGlobalSearch(e.target.value); }}
-            placeholder="🔍 Buscar por CTT-2026, KAN-24, #47, S/N..."
-            style={{ fontSize:12, paddingRight:28 }}
-          />
-          {globalSearch && (
-            <button onClick={() => { setGlobalSearch(''); setSearchResults([]); }} style={{
-              position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
-              background:'none', border:'none', color:'var(--tm)', cursor:'pointer', fontSize:13,
-            }}>✕</button>
-          )}
-        </div>
-
-        {/* Search results */}
-        {globalSearch.length >= 2 && (
-          <div style={{ background:'var(--s1)', border:'1px solid var(--b2)', borderRadius:'var(--rs)', marginBottom:10, maxHeight:240, overflowY:'auto' }}>
-            {searching && <div style={{ padding:'12px', textAlign:'center', color:'var(--tm)', fontSize:12 }}>Buscando...</div>}
-            {!searching && searchResults.length === 0 && (
-              <div style={{ padding:'12px', textAlign:'center', color:'var(--tm)', fontSize:12 }}>Nenhum resultado</div>
-            )}
-            {!searching && searchResults.map(s => {
-              const lastA = (s.attempts||[]).sort((a,b)=>new Date(b.attempted_at)-new Date(a.attempted_at))[0];
-              const lastR = lastA ? RESULT_MAP[lastA.result] : null;
-              return (
-                <div key={s.id} onClick={() => {
-                  // Select the entity and session
-                  if (s.entity) {
-                    selectEntity(s.entity);
-                    setTimeout(() => selectSession(s), 300);
-                  }
-                  setGlobalSearch(''); setSearchResults([]);
-                }} style={{
-                  padding:'9px 12px', borderBottom:'1px solid var(--b1)', cursor:'pointer',
-                  transition:'background .1s',
-                }}
-                  onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,.03)'}
-                  onMouseLeave={e => e.currentTarget.style.background='transparent'}
-                >
-                  <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:2 }}>
-                    {s.protocol && <span style={{ fontSize:10, fontFamily:'monospace', fontWeight:800, color:'var(--y)', background:'rgba(255,215,0,.08)', padding:'1px 6px', borderRadius:999 }}>{s.protocol}</span>}
-                    {s.chamado?.jira_key && <span style={{ fontSize:10, fontWeight:700, color:'var(--bl)' }}>{s.chamado.jira_key}</span>}
-                    {s.chamado?.id && <span style={{ fontSize:10, color:'var(--tm)' }}>#{s.chamado.id}</span>}
-                    <span style={{ fontSize:11, fontWeight:600, color:'var(--tx)', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.title}</span>
-                    {lastR && <span style={{ color:lastR.color, fontSize:12 }}>{lastR.icon}</span>}
-                  </div>
-                  <div style={{ fontSize:10.5, color:'var(--tm)' }}>
-                    {s.entity?.name} · {s.entity?.category} · {(s.attempts||[]).length} tentativas
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Contact Attempts Calendar */}
-        <div style={{ background:'var(--s1)', border:'1px solid var(--b1)', borderRadius:'var(--rs)', padding:10, marginBottom:10 }}>
-          <div style={{ fontSize:10, fontWeight:700, color:'var(--tm)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:6 }}>📅 Tentativas</div>
-          <ContactsCalendar attempts={entities.flatMap(e =>
-            (e.sessions||[]).flatMap(s =>
-              (s.attempts||[]).map(a => ({
-                ...a,
-                _entityName:   e.name,
-                _entityCat:    e.category,
-                _sessionTitle: s.title,
-                _chamadoId:    s.chamado_id,
-              }))
-            )
-          )} />
-        </div>
-        <div style={{ display:'flex', gap:6, marginBottom:8 }}>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Buscar..." style={{ flex:1, fontSize:12 }} />
-          <Btn variant="primary" style={{ fontSize:11, padding:'7px 10px' }} onClick={() => setShowNewEntity(v=>!v)}>+</Btn>
-        </div>
-        <div style={{ display:'flex', gap:3, flexWrap:'wrap', marginBottom:8 }}>
-          {['', ...CATEGORIES].map(c => (
-            <button key={c} onClick={() => setCatFilter(c)} style={{ fontSize:10, padding:'2px 8px', border:'1px solid var(--b2)', borderRadius:999, cursor:'pointer', fontFamily:'inherit', fontWeight:600, background: catFilter===c ? 'var(--y)' : 'var(--s2)', color: catFilter===c ? '#000' : 'var(--tm)' }}>
-              {c || 'Todos'}
-            </button>
-          ))}
-        </div>
-
-        {showNewEntity && (
-          <div style={{ background:'var(--s2)', border:'1px solid var(--b2)', borderRadius:'var(--rs)', padding:10, marginBottom:8 }}>
-            <Field label="Categoria" style={{ marginBottom:6 }}><select value={entityForm.category} onChange={e=>setE('category',e.target.value)}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
-            <Field label="Nome *" style={{ marginBottom:6 }}><input value={entityForm.name} onChange={e=>setE('name',e.target.value)} /></Field>
-            <Field label="Telefone" style={{ marginBottom:6 }}><input value={entityForm.phone} onChange={e=>setE('phone',e.target.value)} /></Field>
-            <Field label="Email" style={{ marginBottom:6 }}><input value={entityForm.email} onChange={e=>setE('email',e.target.value)} /></Field>
-            {entityForm.category === 'Fabricantes' && <>
-              <div style={{ fontSize:10, fontWeight:700, color:'var(--bl)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:5, marginTop:4, borderTop:'1px solid var(--b1)', paddingTop:6 }}>Contato no Fabricante</div>
-              <Field label="Responsável" style={{ marginBottom:6 }}><input value={entityForm.fabricante_contact_name} onChange={e=>setE('fabricante_contact_name',e.target.value)} /></Field>
-              <Field label="Cargo" style={{ marginBottom:6 }}><input value={entityForm.fabricante_contact_role} onChange={e=>setE('fabricante_contact_role',e.target.value)} /></Field>
-              <Field label="Tel. direto" style={{ marginBottom:6 }}><input value={entityForm.fabricante_contact_phone} onChange={e=>setE('fabricante_contact_phone',e.target.value)} /></Field>
-            </>}
-            <Field label="Notas" style={{ marginBottom:8 }}><textarea value={entityForm.notes} onChange={e=>setE('notes',e.target.value)} rows={2} /></Field>
-            <div style={{ display:'flex', gap:5 }}>
-              <Btn variant="primary" style={{ fontSize:11 }} onClick={saveEntity}>Salvar</Btn>
-              <Btn variant="ghost" style={{ fontSize:11 }} onClick={() => setShowNewEntity(false)}>Cancelar</Btn>
-            </div>
-          </div>
-        )}
-
-        <div style={{ display:'flex', flexDirection:'column', gap:4, maxHeight:'65vh', overflowY:'auto' }}>
-          {filtered.length === 0 && <div style={{ textAlign:'center', color:'var(--tm)', fontSize:12, padding:'24px 0' }}>Nenhum contato</div>}
-          {filtered.map(e => {
-            const count = entityAttemptCount(e);
-            const lastRes = entityLastResult(e);
-            return (
-              <div key={e.id} onClick={() => selectEntity(e)} style={{
-                padding:'9px 11px', borderRadius:'var(--rs)', cursor:'pointer',
-                background: selected?.id===e.id ? 'rgba(255,215,0,.07)' : 'var(--s1)',
-                border: `1px solid ${selected?.id===e.id ? 'rgba(255,215,0,.3)' : 'var(--b1)'}`,
-              }}>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:2 }}>
-                  <div style={{ fontSize:12.5, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{e.name}</div>
-                  <span style={{ fontSize:9, background:'var(--s2)', color:'var(--tm)', padding:'1px 6px', borderRadius:999, fontWeight:600, marginLeft:4, flexShrink:0 }}>{e.category}</span>
-                </div>
-                <div style={{ fontSize:10.5, color:'var(--tm)', display:'flex', gap:8 }}>
-                  <span>{(e.sessions||[]).length} sess.</span>
-                  <span>{count} tent.</span>
-                  {lastRes && <span style={{ color:lastRes.color, fontWeight:600 }}>{lastRes.icon}</span>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Col 2 — Sessions */}
-      <div>
-        {!selected ? (
-          <div style={{ textAlign:'center', color:'var(--tm)', fontSize:12, padding:'60px 0' }}>← Selecione um contato</div>
-        ) : (
-          <>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--tx)' }}>{selected.name}</div>
-              <Btn variant="primary" style={{ fontSize:10, padding:'5px 9px' }} onClick={() => setShowNewSession(v=>!v)}>+ Sessão</Btn>
-            </div>
-
-            {showNewSession && (
-              <div style={{ background:'var(--s2)', border:'1px solid var(--b2)', borderRadius:'var(--rs)', padding:10, marginBottom:8 }}>
-                <Field label="Título *" style={{ marginBottom:6 }}><input value={sessionForm.title} onChange={e=>setS('title',e.target.value)} placeholder="Ex: Garantia Inversor, Chamado #123" /></Field>
-                <Field label="Vincular chamado" style={{ marginBottom:6 }}>
-                  <select value={sessionForm.chamado_id} onChange={e=>setS('chamado_id',e.target.value)}>
-                    <option value="">Nenhum</option>
-                    {cases.map(c=><option key={c.id} value={c.id}>#{c.id} — {c.integrador||c.cliente_final||c.nome} | {c.sn||'-'}</option>)}
-                  </select>
-                </Field>
-                <Field label="Notas" style={{ marginBottom:8 }}><textarea value={sessionForm.notes} onChange={e=>setS('notes',e.target.value)} rows={2} /></Field>
-                <div style={{ display:'flex', gap:5 }}>
-                  <Btn variant="primary" style={{ fontSize:11 }} onClick={saveSession}>Criar</Btn>
-                  <Btn variant="ghost" style={{ fontSize:11 }} onClick={() => setShowNewSession(false)}>Cancelar</Btn>
-                </div>
-              </div>
-            )}
-
-            <div style={{ display:'flex', flexDirection:'column', gap:4, maxHeight:'65vh', overflowY:'auto' }}>
-              {sessions.length === 0 && <div style={{ textAlign:'center', color:'var(--tm)', fontSize:12, padding:'24px 0' }}>Nenhuma sessão ainda</div>}
-              {sessions.map(s => {
-                const attCount = (s.attempts||[]).length;
-                const lastA    = (s.attempts||[]).sort((a,b)=>new Date(b.attempted_at)-new Date(a.attempted_at))[0];
-                const lastR    = lastA ? RESULT_MAP[lastA.result] : null;
-                return (
-                  <div key={s.id} onClick={() => selectSession(s)} style={{
-                    padding:'9px 11px', borderRadius:'var(--rs)', cursor:'pointer',
-                    background: selSession?.id===s.id ? 'rgba(96,165,250,.08)' : 'var(--s1)',
-                    border: `1px solid ${selSession?.id===s.id ? 'rgba(96,165,250,.3)' : 'var(--b1)'}`,
-                  }}>
-                    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:2 }}>
-                      <div style={{ fontSize:12, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{s.title}</div>
-                      <span style={{ fontSize:9, padding:'1px 6px', borderRadius:999, fontWeight:700, marginLeft:4, flexShrink:0, background: s.status==='open'?'rgba(34,197,94,.1)':'var(--s2)', color: s.status==='open'?'var(--gr)':'var(--tm)' }}>{s.status==='open'?'Aberta':'Fechada'}</span>
-                    </div>
-                    <div style={{ fontSize:10.5, color:'var(--tm)', display:'flex', gap:8, flexWrap:'wrap' }}>
-                      {s.protocol && <span style={{ fontFamily:'monospace', fontWeight:700, color:'var(--y)', fontSize:10 }}>{s.protocol}</span>}
-                      <span>{attCount} tent.</span>
-                      {s.chamado && <span>🔗 #{s.chamado.id}</span>}
-                      {s.chamado?.jira_key && <span style={{ color:'var(--bl)' }}>{s.chamado.jira_key}</span>}
-                      {lastR && <span style={{ color:lastR.color }}>{lastR.icon}</span>}
-                    </div>
-                    {/* Per-session PDF link */}
-                    <div style={{ marginTop:5 }}>
-                      <a href={`/api/reports/contact-session/${s.id}?token=${token}`} target="_blank" rel="noreferrer"
-                        onClick={e=>e.stopPropagation()}
-                        style={{ fontSize:10, color:'var(--bl)', fontWeight:600, textDecoration:'none' }}>
-                        📄 PDF
-                      </a>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Col 3 — Attempts */}
-      <div>
-        {!selSession ? (
-          <div style={{ textAlign:'center', color:'var(--tm)', fontSize:12, padding:'60px 0' }}>← Selecione uma sessão</div>
-        ) : (
-          <>
-            {/* Session header */}
-            <div style={{ background:'var(--s1)', border:'1px solid var(--b1)', borderRadius:'var(--r)', padding:'14px 16px', marginBottom:10 }}>
-              <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:6 }}>
-                <div>
-                  <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
-                    <div style={{ fontSize:14, fontWeight:800 }}>{selSession.title}</div>
-                    {selSession.protocol && (
-                      <span style={{ fontSize:11, fontFamily:'monospace', fontWeight:800, color:'var(--y)', background:'rgba(255,215,0,.08)', border:'1px solid rgba(255,215,0,.2)', padding:'1px 8px', borderRadius:999 }}>
-                        {selSession.protocol}
-                      </span>
-                    )}
-                  </div>
-                  {selSession.chamado && (
-                    <div style={{ fontSize:11, color:'var(--bl)', marginTop:3, fontWeight:600 }}>
-                      🔗 #{selSession.chamado.id} — {selSession.chamado.sn} | {selSession.chamado.fabricante} | {selSession.chamado.status}
-                    </div>
-                  )}
-                  {selSession.notes && <div style={{ fontSize:11.5, color:'var(--ts)', marginTop:4 }}>{selSession.notes}</div>}
-                </div>
-                <div style={{ display:'flex', gap:5, flexShrink:0 }}>
-                  <a href={`/api/reports/contact-session/${selSession.id}?token=${token}`} target="_blank" rel="noreferrer"
-                    style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:11, fontWeight:600, padding:'5px 10px', borderRadius:'var(--rs)', background:'var(--s2)', border:'1px solid var(--b2)', color:'var(--tm)', textDecoration:'none' }}>
-                    📄 PDF
-                  </a>
-                  {selSession.status === 'open' && (
-                    <Btn variant="ghost" style={{ fontSize:11, padding:'5px 10px' }} onClick={() => closeSession(selSession.id)}>✓ Encerrar</Btn>
-                  )}
-                </div>
-              </div>
-
-              {/* Quick stats */}
-              <div style={{ display:'flex', gap:10, paddingTop:8, borderTop:'1px solid var(--b1)', flexWrap:'wrap' }}>
-                {Object.entries(RESULT_MAP).map(([key, meta]) => {
-                  const count = attempts.filter(a=>a.result===key).length;
-                  if (!count) return null;
-                  return <span key={key} style={{ fontSize:11, color:meta.color, fontWeight:600 }}>{meta.icon} {meta.label}: {count}</span>;
-                })}
-                {attempts.length === 0 && <span style={{ fontSize:11, color:'var(--tm)' }}>Nenhuma tentativa ainda</span>}
-              </div>
-            </div>
-
-            {/* New attempt button */}
-            {selSession.status === 'open' && (
-              <Btn variant="primary" style={{ fontSize:11, padding:'7px 14px', marginBottom:10, width:'100%' }} onClick={() => setShowNewAttempt(v=>!v)}>
-                + Registrar tentativa
-              </Btn>
-            )}
-
-            {/* New attempt form */}
-            {showNewAttempt && (
-              <div style={{ background:'var(--s2)', border:'1px solid var(--b2)', borderRadius:'var(--rs)', padding:12, marginBottom:10 }}>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:8 }}>
-                  <Field label="Data e hora" style={{ marginBottom:0 }}>
-                    <input type="datetime-local" value={attemptForm.attempted_at} onChange={e=>setA('attempted_at',e.target.value)} />
-                  </Field>
-                  <Field label="Resultado" style={{ marginBottom:0 }}>
-                    <select value={attemptForm.result} onChange={e=>setA('result',e.target.value)}>
-                      {Object.entries(RESULT_MAP).map(([key,meta]) => <option key={key} value={key}>{meta.icon} {meta.label}</option>)}
-                    </select>
-                  </Field>
-                </div>
-                <Field label="Observações" style={{ marginBottom:8 }}>
-                  <textarea value={attemptForm.notes} onChange={e=>setA('notes',e.target.value)} rows={2} placeholder="O que foi discutido..." />
-                </Field>
-                <div style={{ display:'flex', gap:6 }}>
-                  <Btn variant="primary" style={{ fontSize:11 }} onClick={saveAttempt}>Salvar</Btn>
-                  <Btn variant="ghost" style={{ fontSize:11 }} onClick={() => setShowNewAttempt(false)}>Cancelar</Btn>
-                </div>
-              </div>
-            )}
-
-            {/* Attempts timeline */}
-            {attempts.length === 0 && !showNewAttempt && (
-              <div style={{ textAlign:'center', color:'var(--tm)', fontSize:12, padding:'24px 0' }}>Nenhuma tentativa. Clique em "+ Registrar tentativa".</div>
-            )}
-            {attempts.map((a,i) => {
-              const res = RESULT_MAP[a.result]||RESULT_MAP.other;
-              const dt  = new Date(a.attempted_at);
-              return (
-                <div key={a.id} style={{ display:'flex', gap:10, padding:'11px 0', borderBottom:'1px solid var(--b1)', alignItems:'flex-start' }}>
-                  <div style={{ width:32, height:32, borderRadius:'50%', flexShrink:0, background:`${res.color}18`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, border:`1px solid ${res.color}30` }}>{res.icon}</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:12, fontWeight:700, color:res.color, marginBottom:1 }}>{res.label}</div>
-                    <div style={{ fontSize:10.5, color:'var(--tm)', marginBottom:2 }}>por {a.author}</div>
-                    <div style={{ fontSize:10.5, color:'var(--tm)', fontFamily:'monospace' }}>
-                      📅 {dt.toLocaleDateString('pt-BR', {weekday:'short', day:'2-digit', month:'2-digit', year:'numeric', timeZone:'America/Sao_Paulo'})} ⏱ {dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit', timeZone:'America/Sao_Paulo'})}
-                    </div>
-                    {a.notes && <div style={{ fontSize:12, color:'var(--ts)', background:'var(--s2)', padding:'5px 8px', borderRadius:'var(--rs)', marginTop:5, lineHeight:1.5 }}>{a.notes}</div>}
-                    {/* Attachments */}
-                    {(a.metadata?.attachments||[]).map((att, ai) => (
-                      <a key={ai} href={att.url} target="_blank" rel="noreferrer" style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:10.5, color:'var(--bl)', marginTop:4, textDecoration:'none', fontWeight:600 }}>
-                        📎 {att.name}
-                      </a>
-                    ))}
-                  </div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:3, alignItems:'center' }}>
-                    {/* Clip attachment */}
-                    <label title="Anexar comprovante" style={{ cursor:'pointer', fontSize:13, color:'var(--tm)', padding:'2px 4px', borderRadius:4 }}
-                      onMouseEnter={e=>e.currentTarget.style.color='var(--bl)'}
-                      onMouseLeave={e=>e.currentTarget.style.color='var(--tm)'}>
-                      📎
-                      <input type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={async (ev) => {
-                        const file = ev.target.files?.[0];
-                        if (!file) return;
-                        const fd = new FormData();
-                        fd.append('file', file);
-                        try {
-                          const token = localStorage.getItem('session_token');
-                          const r = await fetch(`/api/contacts/attempts/${a.id}/attach`, {
-                            method: 'POST',
-                            headers: { 'Authorization': `Bearer ${token}` },
-                            body: fd,
-                          });
-                          const data = await r.json();
-                          if (data.url) { showToast('📎 Comprovante anexado!'); loadAttempts(selSession.id); }
-                          else showToast('❌ ' + (data.error||'Erro'), 'warn');
-                        } catch(e) { showToast('❌ ' + e.message, 'warn'); }
-                        ev.target.value = '';
-                      }} />
-                    </label>
-                    <button onClick={() => deleteAttempt(a.id)} style={{ background:'none', border:'none', color:'var(--tm)', cursor:'pointer', fontSize:12, padding:'2px 4px', borderRadius:4 }}
-                      onMouseEnter={e=>e.currentTarget.style.color='var(--re)'}
-                      onMouseLeave={e=>e.currentTarget.style.color='var(--tm)'}>✕</button>
-                  </div>
-                </div>
-              );
-            })}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-
-export default function Agenda({ showToast }) {
-  const now = new Date();
-  const [activeTab, setActiveTab] = useState('reminders');
+  const isAdminOrMaster = ['admin','master'].includes(user?.role) ||
+    (user?.permissions||[]).includes('view_all_cases') ||
+    (user?.permissions||[]).includes('manage_roles');
   const [year, setYear]       = useState(now.getFullYear());
   const [month, setMonth]     = useState(now.getMonth());
   const [reminders, setReminders] = useState([]);
@@ -853,9 +339,10 @@ export default function Agenda({ showToast }) {
   const [search, setSearch]   = useState('');
 
   const load = useCallback(async () => {
-    const data = await api('/api/reminders').catch(() => []);
+    const url = isAdminOrMaster ? '/api/reminders?all=true' : '/api/reminders';
+    const data = await api(url).catch(() => []);
     setReminders(data);
-  }, []);
+  }, [isAdminOrMaster]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -920,35 +407,15 @@ export default function Agenda({ showToast }) {
   return (
     <div style={{ padding:'28px 32px' }}>
       {/* Header */}
-      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:16 }}>
+      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:20 }}>
         <div>
           <h1 style={{ fontSize:26, fontWeight:800, letterSpacing:'-.025em', marginBottom:4 }}>📅 Agenda</h1>
-          <p style={{ fontSize:13, color:'var(--tm)' }}>Lembretes de retorno e controle de tentativas de contato.</p>
+          <p style={{ fontSize:13, color:'var(--tm)' }}>Lembretes de retorno e anotações de clientes.</p>
         </div>
-        {activeTab === 'reminders' && (
-          <Btn variant="primary" onClick={() => { setShowForm(true); setEditing(null); }}>
-            + Novo Lembrete
-          </Btn>
-        )}
+        <Btn variant="primary" onClick={() => { setShowForm(true); setEditing(null); }}>
+          + Novo Lembrete
+        </Btn>
       </div>
-
-      {/* Tab switcher */}
-      <div style={{ display:'inline-flex', gap:2, background:'var(--s1)', border:'1px solid var(--b1)', borderRadius:'var(--rs)', padding:3, marginBottom:20 }}>
-        {[{ id:'reminders', label:'📅 Lembretes' }, { id:'contacts', label:'📞 Tentativas de Contato' }].map(t => (
-          <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
-            padding:'8px 18px', border:'none', borderRadius:7, fontSize:12.5, fontWeight:600,
-            cursor:'pointer', fontFamily:'inherit', transition:'all .15s',
-            background: activeTab===t.id ? 'var(--s3)' : 'transparent',
-            color:      activeTab===t.id ? 'var(--tx)' : 'var(--tm)',
-          }}>{t.label}</button>
-        ))}
-      </div>
-
-      {/* Contacts tab */}
-      {activeTab === 'contacts' && <ContactsTab showToast={showToast} />}
-
-      {/* Reminders tab */}
-      {activeTab === 'reminders' && <>
 
       {/* Stat strip */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:18 }}>
@@ -1046,8 +513,6 @@ export default function Agenda({ showToast }) {
           ))}
         </div>
       </div>
-    </>
-    }
     </div>
   );
 }

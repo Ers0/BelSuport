@@ -15,10 +15,8 @@ const { google } = require('googleapis');
 const { supabaseAdmin } = require('../services/db');
 
 // ── Multer ────────────────────────────────────────────────────────────────────
-const TMP = process.env.CLOUD_MODE === 'true'
-  ? '/tmp'
-  : path.join(process.cwd(), '_tmp_uploads');
-if (TMP !== '/tmp') fs.mkdirSync(TMP, { recursive: true });
+const TMP = path.join(process.cwd(), '_tmp_uploads');
+fs.mkdirSync(TMP, { recursive: true });
 
 const upload = multer({
   dest: TMP,
@@ -521,6 +519,85 @@ router.post('/search', async (req, res) => {
     console.error('[Solutions] search error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+
+// ── GET /api/solutions/:id/comments ──────────────────────────────────────────
+router.get('/:id/comments', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('solution_comments')
+      .select('*')
+      .eq('solution_id', req.params.id)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/solutions/:id/comments ─────────────────────────────────────────
+router.post('/:id/comments', async (req, res) => {
+  try {
+    const { body, mentions } = req.body;
+    if (!body?.trim()) return res.status(400).json({ error: 'Comentário vazio' });
+
+    const { data, error } = await supabaseAdmin
+      .from('solution_comments')
+      .insert([{
+        solution_id: req.params.id,
+        user_id:     req.user?.id,
+        author:      req.user?.name || req.user?.email || 'Técnico',
+        author_pic:  req.user?.picture || null,
+        body:        body.trim(),
+        mentions:    Array.isArray(mentions) ? mentions : [],
+      }])
+      .select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── PUT /api/solutions/comments/:id ──────────────────────────────────────────
+router.put('/comments/:id', async (req, res) => {
+  try {
+    const { body, mentions } = req.body;
+    const { data, error } = await supabaseAdmin
+      .from('solution_comments')
+      .update({ body: body.trim(), mentions: mentions || [], edited: true, updated_at: new Date() })
+      .eq('id', req.params.id)
+      .eq('user_id', req.user?.id) // only own comments
+      .select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── DELETE /api/solutions/comments/:id ───────────────────────────────────────
+router.delete('/comments/:id', async (req, res) => {
+  try {
+    const userRole = req.user?.role || 'technician';
+    const canDeleteAny = ['admin','master'].includes(userRole);
+    let query = supabaseAdmin.from('solution_comments').delete().eq('id', req.params.id);
+    if (!canDeleteAny) query = query.eq('user_id', req.user?.id);
+    const { error } = await query;
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /api/solutions/search-mention?q= — search solutions for @mention ─────
+router.get('/search-mention', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.length < 2) return res.json([]);
+    const { data, error } = await supabaseAdmin
+      .from('solutions')
+      .select('id, title, fabricante, categoria')
+      .or(`title.ilike.%${q}%,fabricante.ilike.%${q}%`)
+      .limit(8);
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 module.exports = router;

@@ -31,10 +31,33 @@ export default function App() {
   // ── Auth ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     const token = localStorage.getItem('session_token');
-    if (!token || token === 'null') { setAuthReady(true); return; }
+
+    // If no localStorage token, try a cookie-based /me ping (credentials:include sends cookie).
+    // If that also fails (no cookie), just show login — no reload loop.
+    if (!token || token === 'null') {
+      // Attempt silent cookie restore — uses a raw fetch so api.js 401-handler
+      // doesn't trigger window.location.reload() on a missing token
+      fetch('/api/auth/me', { credentials: 'include' })
+        .then(r => r.ok ? r.json() : null)
+        .then(u => {
+          if (u && u.authenticated && !u.blocked) {
+            // Cookie session valid — sync token back to localStorage from response header
+            // (backend sets Set-Cookie, no JS-readable token here, but user is authed)
+            setUser({
+              ...u,
+              permissions: Array.isArray(u.permissions) ? u.permissions
+                : ['create_case','view_own_cases','edit_own_case','view_basic_status','export_pdf'],
+            });
+          }
+          setAuthReady(true);
+        })
+        .catch(() => setAuthReady(true));
+      return;
+    }
+
+    // Normal flow: token in localStorage
     api('/api/auth/me').then(u => {
-      if (u.blocked) {
-        // Access revoked — clear token and show blocked state
+      if (u?.blocked) {
         localStorage.removeItem('session_token');
         setUser({ blocked: true, message: u.message });
         setAuthReady(true);
@@ -42,11 +65,13 @@ export default function App() {
       }
       setUser({
         ...u,
-        permissions: Array.isArray(u.permissions) ? u.permissions : ['create_case', 'view_own_cases', 'edit_own_case', 'view_basic_status', 'export_pdf'],
+        permissions: Array.isArray(u.permissions) ? u.permissions
+          : ['create_case','view_own_cases','edit_own_case','view_basic_status','export_pdf'],
       });
       setAuthReady(true);
     }).catch(() => {
-      localStorage.removeItem('session_token'); setAuthReady(true);
+      localStorage.removeItem('session_token');
+      setAuthReady(true);
     });
   }, []);
 

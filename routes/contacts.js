@@ -2,6 +2,9 @@
 const express = require('express');
 const router  = express.Router();
 const { supabaseAdmin } = require('../services/db');
+const { encryptFields, decryptRows, keyFromReq, ENCRYPTED_FIELDS } = require('../services/crypto');
+const EF_ENT = ENCRYPTED_FIELDS.contact_entities;
+const EF_ATT = ENCRYPTED_FIELDS.contact_attempts;
 
 // ── GET /api/contacts — list entities
 router.get('/', async (req, res) => {
@@ -17,16 +20,17 @@ router.get('/', async (req, res) => {
     if (q)        query = query.ilike('name', `%${q}%`);
     const { data, error } = await query;
     if (error) throw error;
-    res.json(data || []);
+    res.json(decryptRows(data || [], EF_ENT, keyFromReq(req)));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── POST /api/contacts — create entity
 router.post('/', async (req, res) => {
   try {
+    const key = keyFromReq(req);
     const { data, error } = await supabaseAdmin
       .from('contact_entities')
-      .insert([{ ...req.body, user_id: req.user?.id, updated_at: new Date() }])
+      .insert([encryptFields({ ...req.body, user_id: req.user?.id, updated_at: new Date() }, EF_ENT, key)])
       .select().single();
     if (error) throw error;
     res.json(data);
@@ -36,9 +40,10 @@ router.post('/', async (req, res) => {
 // ── PUT /api/contacts/:id
 router.put('/:id', async (req, res) => {
   try {
+    const key = keyFromReq(req);
     const { data, error } = await supabaseAdmin
       .from('contact_entities')
-      .update({ ...req.body, updated_at: new Date() })
+      .update(encryptFields({ ...req.body, updated_at: new Date() }, EF_ENT, key))
       .eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
@@ -133,9 +138,10 @@ router.post('/sessions/:id/attempts', async (req, res) => {
     const { data: session } = await supabaseAdmin
       .from('contact_sessions').select('entity_id').eq('id', req.params.id).single();
 
+    const key = keyFromReq(req);
     const { data, error } = await supabaseAdmin
       .from('contact_attempts')
-      .insert([{
+      .insert([encryptFields({
         session_id:   req.params.id,
         entity_id:    session?.entity_id,
         user_id:      req.user?.id,
@@ -143,7 +149,7 @@ router.post('/sessions/:id/attempts', async (req, res) => {
         result:       result || 'no_answer',
         notes:        notes || null,
         attempted_at: attempted_at || new Date().toISOString(),
-      }])
+      }, EF_ATT, key)])
       .select().single();
     if (error) throw error;
 
