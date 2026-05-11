@@ -12,6 +12,7 @@ import SolutionCentre from './views/SolutionCentre';
 import Agenda from './views/Agenda';
 import Diagnostico from './views/Diagnostico';
 import { Produtos, Historico, Jira, Configuracoes } from './views/OtherViews';
+import AIObservability from './views/AIObservability';
 
 export default function App() {
   const [user, setUser]           = useState(null);
@@ -31,33 +32,10 @@ export default function App() {
   // ── Auth ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     const token = localStorage.getItem('session_token');
-
-    // If no localStorage token, try a cookie-based /me ping (credentials:include sends cookie).
-    // If that also fails (no cookie), just show login — no reload loop.
-    if (!token || token === 'null') {
-      // Attempt silent cookie restore — uses a raw fetch so api.js 401-handler
-      // doesn't trigger window.location.reload() on a missing token
-      fetch('/api/auth/me', { credentials: 'include' })
-        .then(r => r.ok ? r.json() : null)
-        .then(u => {
-          if (u && u.authenticated && !u.blocked) {
-            // Cookie session valid — sync token back to localStorage from response header
-            // (backend sets Set-Cookie, no JS-readable token here, but user is authed)
-            setUser({
-              ...u,
-              permissions: Array.isArray(u.permissions) ? u.permissions
-                : ['create_case','view_own_cases','edit_own_case','view_basic_status','export_pdf'],
-            });
-          }
-          setAuthReady(true);
-        })
-        .catch(() => setAuthReady(true));
-      return;
-    }
-
-    // Normal flow: token in localStorage
+    if (!token || token === 'null') { setAuthReady(true); return; }
     api('/api/auth/me').then(u => {
-      if (u?.blocked) {
+      if (u.blocked) {
+        // Access revoked — clear token and show blocked state
         localStorage.removeItem('session_token');
         setUser({ blocked: true, message: u.message });
         setAuthReady(true);
@@ -65,13 +43,11 @@ export default function App() {
       }
       setUser({
         ...u,
-        permissions: Array.isArray(u.permissions) ? u.permissions
-          : ['create_case','view_own_cases','edit_own_case','view_basic_status','export_pdf'],
+        permissions: Array.isArray(u.permissions) ? u.permissions : ['create_case', 'view_own_cases', 'edit_own_case', 'view_basic_status', 'export_pdf'],
       });
       setAuthReady(true);
     }).catch(() => {
-      localStorage.removeItem('session_token');
-      setAuthReady(true);
+      localStorage.removeItem('session_token'); setAuthReady(true);
     });
   }, []);
 
@@ -275,7 +251,8 @@ export default function App() {
     dashboard:    <Dashboard showToast={showToast} user={user} onDataLoad={setDashData} onNavigate={setView} />,
     clientes:     <Clientes showToast={showToast} />,
     solutions:    <SolutionCentre showToast={showToast} user={user} />,
-    agenda:       <Agenda showToast={showToast} />,
+    agenda:       <Agenda showToast={showToast} user={user} />,
+    ai_obs:       <AIObservability showToast={showToast} />,
     diagnostico:  <Diagnostico showToast={showToast} />,
     produtos:     <ProdutosView showToast={showToast} allProducts={allProducts} onNavigate={setView} user={user} />,
     historico:    <Historico showToast={showToast} user={user} />,

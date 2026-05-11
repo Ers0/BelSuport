@@ -5,12 +5,12 @@ const NAV = [
   { id:'dashboard',     icon:'📊', label:'Dashboard' },
   { id:'clientes',      icon:'👥', label:'Clientes' },
   { id:'solutions',     icon:'🔬', label:'Soluções' },
-  { id:'agenda',        icon:'📅', label:'Agenda' },
   { id:'diagnostico',   icon:'🔬', label:'Diagnóstico' },
   { id:'produtos',      icon:'📦', label:'Produtos' },
   { id:'historico',     icon:'🕘', label:'Histórico' },
   { id:'jira',          icon:'🔗', label:'Jira' },
   { id:'configuracoes', icon:'⚙️', label:'Configurações' },
+  { id:'ai_obs',        icon:'🧠', label:'AI Obs',       roles:['master','admin'] },
 ];
 
 export default function Sidebar({ view, setView, user, onLogout, lastUpdate, onExportCSV, folders, selectedFolder, onFolderChange, notificationBell, watcherStatus }) {
@@ -30,7 +30,7 @@ export default function Sidebar({ view, setView, user, onLogout, lastUpdate, onE
       width:'var(--sidebar)', minWidth:'var(--sidebar)',
       background:'var(--s1)', borderRight:'1px solid var(--b1)',
       display:'flex', flexDirection:'column',
-      position:'sticky', top:0, height:'100vh', overflowY:'overlay',
+      position:'sticky', top:0, height:'100vh', overflowY:'auto',
     }}>
       {/* Logo */}
       <div style={{ display:'flex', alignItems:'center', gap:10, padding:'18px 14px 16px', borderBottom:'1px solid var(--b1)' }}>

@@ -87,18 +87,15 @@ async function authMiddleware(req, res, next) {
     }
 
     const authHeader = req.headers.authorization || '';
-    // Priority: Bearer header > query param (SSE) > httpOnly cookie (persistent login)
+    // Also accept token from query param — needed for EventSource (SSE) which
+    // cannot set custom headers via the browser EventSource API
     const token = (authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null)
                || req.query.token
-               || req.cookies?.session_token  // auto-login from 30-day cookie
                || null;
 
     if (!token || token === 'null' || token === 'undefined') {
         return res.status(401).json({ authenticated: false, error: 'Token necessário' });
     }
-
-    // If token came from cookie but not from header, sync it back to cookie to refresh expiry
-    const tokenFromCookie = !req.headers.authorization && !req.query.token && !!req.cookies?.session_token;
 
     try {
         // 🔍 Busca a sessão. Importante: usamos .maybeSingle() para evitar erros se não achar
@@ -114,13 +111,13 @@ async function authMiddleware(req, res, next) {
         }
 
         if (data && data.user_data) {
+            // Sucesso! Decodifica o usuário e autoriza
             const sessionUser = typeof data.user_data === 'string' ? JSON.parse(data.user_data) : data.user_data;
+    
+            // Any authenticated Google user can access the app.
+            // Admin-only actions (products, global settings) are guarded
+            // per-route via the isAdmin middleware in products.js / settings.js.
             req.user = sessionUser;
-
-            // Refresh the cookie expiry if token came from cookie (sliding 30-day window)
-            if (tokenFromCookie) {
-                setSessionCookie(res, token);
-            }
             return next();
         }
 
@@ -215,26 +212,49 @@ router.get('/callback', async (req, res) => {
     }
 
     if (!existingUser) {
-      // New user — check pre-approval list
-      const { data: approval } = await supabaseAdmin
+      // ── Look up approval: try google_id first (most reliable), then email ──────
+      // google_id is stored in user_approvals after first use or after admin approve.
+      // Email lookup fails when email is encrypted (enc:...) — google_id bypasses that.
+      let approval = null;
+
+      // Strategy 1: match by google_id (reliable for returning users)
+      const { data: approvalByGid } = await supabaseAdmin
         .from('user_approvals')
-        .select('role_id, id')
-        .ilike('email', user.email)
-        .eq('used', false)
+        .select('role_id, id, used')
+        .eq('google_id', user.id)
         .maybeSingle();
 
+      if (approvalByGid) {
+        approval = approvalByGid;
+        console.log(`[Auth] Found approval by google_id: role_id=${approval.role_id} used=${approval.used}`);
+      }
+
+      // Strategy 2: match by plaintext email (works for new approvals before first use)
+      if (!approval) {
+        const { data: approvalByEmail } = await supabaseAdmin
+          .from('user_approvals')
+          .select('role_id, id, used')
+          .ilike('email', user.email)
+          .eq('used', false)
+          .maybeSingle();
+        if (approvalByEmail) {
+          approval = approvalByEmail;
+          console.log(`[Auth] Found approval by email: role_id=${approval.role_id}`);
+        }
+      }
+
       if (approval) {
-        // Pre-approved — create settings_user with the approved role
+        // Grant access — (re)create settings_user row in case it was lost
         await supabaseAdmin.from('settings_user').upsert({
           user_id:    user.id,
           role_id:    approval.role_id,
           updated_at: new Date(),
         });
-        // Mark approval as used and store google_id for future revoke lookups
+        // Mark used and bind google_id for future lookups
         await supabaseAdmin.from('user_approvals')
           .update({ used: true, used_at: new Date(), google_id: user.id })
           .eq('id', approval.id);
-        console.log(`✅ [Auth] Pre-approved login: ${user.email} → role_id ${approval.role_id}`);
+        console.log(`✅ [Auth] Approved login: ${user.email} → role_id ${approval.role_id}`);
       } else {
         // Unknown user — log access request and notify admins/masters
         const { data: existing } = await supabaseAdmin
@@ -324,11 +344,12 @@ router.get('/callback', async (req, res) => {
     console.log("5. Tentando salvar no Supabase...");
     const { data, error: dbError } = await supabaseAdmin
       .from('persistent_sessions')
-      .insert([{
-        token:      sessionToken,
-        user_id:    user.id,    // enables name lookup without scanning all sessions
-        user_data:  JSON.stringify(user),
-      }]);
+      .insert([
+        { 
+          token: sessionToken, 
+          user_data: JSON.stringify(user) 
+        }
+      ]);
 
     if (dbError) {
       console.error("ERRO CRÍTICO NO SUPABASE:", dbError.message);
@@ -653,15 +674,29 @@ router.post('/access-requests/:id', authMiddleware, async (req, res) => {
         role_id:    Number(role_id),
         updated_at: new Date(),
       });
-      // Pre-approve for future logins too
-      await supabaseAdmin.from('user_approvals').upsert({
-        email:       req_.email.toLowerCase(),
-        role_id:     Number(role_id),
-        google_id:   req_.google_id,
-        approved_by: req.user.id,
-        used:        true,
-        used_at:     new Date(),
-      });
+      // Pre-approve for future logins — bind google_id so next login finds it reliably.
+      // Update by google_id if it exists, otherwise insert with email.
+      // This avoids duplicate rows caused by encrypted email mismatch.
+      const { data: existingApproval } = await supabaseAdmin
+        .from('user_approvals').select('id').eq('google_id', req_.google_id).maybeSingle();
+
+      if (existingApproval) {
+        await supabaseAdmin.from('user_approvals').update({
+          role_id:     Number(role_id),
+          approved_by: req.user.id,
+          used:        true,
+          used_at:     new Date(),
+        }).eq('id', existingApproval.id);
+      } else {
+        await supabaseAdmin.from('user_approvals').insert({
+          email:       req_.email || '',
+          role_id:     Number(role_id),
+          google_id:   req_.google_id,
+          approved_by: req.user.id,
+          used:        true,
+          used_at:     new Date(),
+        });
+      }
 
       // Send approval email to the user
       try {

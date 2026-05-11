@@ -939,68 +939,26 @@ function Sidebar({ brands, tags, activeBrand, activeTag, onBrand, onTag, counts,
 // AI SEARCH ANSWER
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Inline markdown renderer — no external dep
-function Md({ text }) {
-  if (!text) return null;
-  return (
-    <div>
-      {text.split('\n').map((line, i) => {
-        if (line.startsWith('## ')) return <h3 key={i} style={{ color:'var(--y)', fontSize:13, fontWeight:700, margin:'12px 0 5px', borderBottom:'1px solid var(--b1)', paddingBottom:3 }}>{line.slice(3)}</h3>;
-        if (line.startsWith('### ')) return <h4 key={i} style={{ color:'var(--bl)', fontSize:12, fontWeight:700, margin:'9px 0 3px' }}>{line.slice(4)}</h4>;
-        if (line.match(/^[-*]\s/)) return <div key={i} style={{ display:'flex', gap:6, marginBottom:3, paddingLeft:8 }}><span style={{ color:'var(--y)', flexShrink:0 }}>•</span><span style={{ color:'var(--ts)', fontSize:12, lineHeight:1.5 }} dangerouslySetInnerHTML={{ __html: line.slice(2).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`(.+?)`/g,'<code style="background:var(--s3);color:#7dd3fc;padding:1px 4px;border-radius:3px;font-size:10px">$1</code>') }} /></div>;
-        if (line.match(/^\d+\.\s/)) { const [num, ...rest] = line.split('. '); return <div key={i} style={{ display:'flex', gap:8, marginBottom:4, paddingLeft:8 }}><span style={{ color:'var(--y)', fontWeight:700, minWidth:18, fontSize:12 }}>{num}.</span><span style={{ color:'var(--ts)', fontSize:12, lineHeight:1.5 }}>{rest.join('. ')}</span></div>; }
-        if (!line.trim()) return <div key={i} style={{ height:5 }} />;
-        return <p key={i} style={{ color:'var(--ts)', fontSize:12, lineHeight:1.6, margin:'0 0 5px' }} dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`(.+?)`/g,'<code style="background:var(--s3);color:#7dd3fc;padding:1px 4px;border-radius:3px;font-size:10px">$1</code>') }} />;
-      })}
-    </div>
-  );
-}
-
-function AIBanner({ answer, sources, fallback, similarity, loading, onClear, onViewSource }) {
+function AIBanner({ answer, loading, onClear }) {
   if (!answer && !loading) return null;
-  const isFallback = fallback || (similarity !== undefined && similarity < 0.45);
   return (
     <div style={{
-      gridColumn:'1/-1', padding:'16px 20px',
-      background: isFallback ? 'rgba(239,68,68,.04)' : 'rgba(255,215,0,.04)',
-      border: `1px solid ${isFallback ? 'rgba(239,68,68,.25)' : 'rgba(255,215,0,.18)'}`,
+      gridColumn:'1/-1', padding:'18px 22px',
+      background:'rgba(255,215,0,.04)', border:'1px solid rgba(255,215,0,.18)',
       borderRadius:12, marginBottom:4,
     }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-          <span style={{ fontSize:15 }}>{isFallback ? '⚠️' : '✨'}</span>
-          <span style={{ fontSize:13, fontWeight:700, color: isFallback ? 'var(--re)' : 'var(--y)' }}>
-            {isFallback ? 'Sem solução verificada' : 'Resposta gerada pela IA'}
-          </span>
-          {!isFallback && similarity !== undefined && (
-            <span style={{ fontSize:10, background:'rgba(34,197,94,.15)', color:'var(--gr)',
-              border:'1px solid rgba(34,197,94,.3)', borderRadius:6, padding:'1px 7px', fontWeight:700 }}>
-              {Math.round(similarity * 100)}% relevante
-            </span>
-          )}
-          {!isFallback && sources?.length > 0 && (
-            <span style={{ fontSize:10, color:'var(--tm)' }}>{sources.length} fonte(s)</span>
-          )}
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <span style={{ fontSize:16 }}>✨</span>
+          <span style={{ fontSize:13, fontWeight:700, color:'var(--y)' }}>Resposta gerada pela IA</span>
+          <span style={{ fontSize:11, color:'var(--tm)' }}>baseada nas soluções indexadas</span>
         </div>
         <button onClick={onClear} style={{ background:'none', border:'none', color:'var(--ts)', cursor:'pointer', fontSize:13 }}>✕</button>
       </div>
-
       {loading
-        ? <div style={{ fontSize:12, color:'var(--tm)', fontStyle:'italic' }}>Consultando base de soluções indexadas...</div>
-        : <Md text={answer} />
+        ? <div style={{ fontSize:13, color:'var(--tm)', fontStyle:'italic' }}>Sintetizando resposta com base no banco de soluções...</div>
+        : <div style={{ fontSize:13, color:'var(--tx)', lineHeight:1.7, whiteSpace:'pre-wrap' }}>{answer}</div>
       }
-
-      {!loading && !isFallback && sources?.length > 0 && (
-        <div style={{ marginTop:10, display:'flex', flexWrap:'wrap', gap:5 }}>
-          {sources.map(s => (
-            <button key={s.id} onClick={() => onViewSource?.(s.id)}
-              style={{ background:'var(--s3)', border:'1px solid var(--b2)', color:'var(--ts)',
-                borderRadius:7, padding:'3px 9px', fontSize:10, cursor:'pointer' }}>
-              📄 {s.title?.slice(0,40)}{s.title?.length > 40 ? '…' : ''}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -1017,8 +975,8 @@ export default function SolutionCentre({ showToast, user }) {
   const [loading,       setLoading]       = useState(false);
   const [searching,     setSearching]     = useState(false);
   const [query,         setQuery]         = useState('');
-  const [aiAnswer,      setAiAnswer]      = useState(null);   // backward compat
-  const [ragResult,     setRagResult]     = useState(null);   // { answer, sources, fallback, similarity }
+  const [showVoice,  setShowVoice]  = useState(false);
+  const [aiAnswer,      setAiAnswer]      = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [activeBrand,   setActiveBrand]   = useState('');
   const [activeTag,     setActiveTag]     = useState('');
@@ -1046,23 +1004,12 @@ export default function SolutionCentre({ showToast, user }) {
 
   // Semantic search with debounce
   async function doSearch(q) {
-    if (!q.trim()) { setSearchResults(null); setAiAnswer(null); setRagResult(null); return; }
-    setSearching(true); setAiAnswer(null); setRagResult(null);
+    if (!q.trim()) { setSearchResults(null); setAiAnswer(null); return; }
+    setSearching(true); setAiAnswer(null);
     try {
-      // Run vector search + RAG in parallel
-      const [searchRes, ragRes] = await Promise.allSettled([
-        api('/api/solutions/search', { method:'POST', body: JSON.stringify({ query:q, brand:activeBrand||undefined }) }),
-        api('/api/analysis/rag', { method:'POST', body: JSON.stringify({
-          userMessage: q,
-          brand: activeBrand || undefined,
-        }) }),
-      ]);
-
-      if (searchRes.status === 'fulfilled') setSearchResults(searchRes.value?.solutions || []);
-      if (ragRes.status === 'fulfilled' && ragRes.value?.answer) {
-        setRagResult(ragRes.value);
-        setAiAnswer(ragRes.value.answer); // backward compat
-      }
+      const res = await api('/api/solutions/search', { method:'POST', body: JSON.stringify({ query:q, brand:activeBrand||undefined }) });
+      setSearchResults(res.solutions || []);
+      setAiAnswer(res.answer || null);
     } catch(e) { showToast('Erro na busca: ' + e.message, 'warn'); }
     setSearching(false);
   }
@@ -1070,7 +1017,7 @@ export default function SolutionCentre({ showToast, user }) {
   function handleQuery(val) {
     setQuery(val);
     clearTimeout(searchTimer.current);
-    if (!val.trim()) { setSearchResults(null); setAiAnswer(null); setRagResult(null); return; }
+    if (!val.trim()) { setSearchResults(null); setAiAnswer(null); return; }
     searchTimer.current = setTimeout(() => doSearch(val), 700);
   }
 
@@ -1152,6 +1099,7 @@ export default function SolutionCentre({ showToast, user }) {
 
   // ── Browse ──────────────────────────────────────────────────────────────────
   return (
+    <>
     <div style={{ padding:'24px 28px 48px' }}>
       {/* Reader */}
       {selectedSol && (
@@ -1191,6 +1139,13 @@ export default function SolutionCentre({ showToast, user }) {
           placeholder="Busca semântica — ex: inversor sem comunicação após chuva, alarme F01, reset WIFI Deye..."
           style={{ width:'100%', paddingLeft:46, paddingRight:100, fontSize:14, padding:'13px 110px 13px 46px', background:'var(--s1)', border:'1.5px solid var(--b2)', borderRadius:12, color:'var(--tx)', fontFamily:'inherit', boxSizing:'border-box' }}
         />
+        <button onClick={() => setShowVoice && setShowVoice(true)} title="Assistente de voz"
+          style={{ position:'absolute', right:110, top:'50%', transform:'translateY(-50%)',
+            background:'rgba(96,165,250,.1)', border:'1px solid rgba(96,165,250,.25)',
+            color:'var(--bl)', borderRadius:8, padding:'6px 10px', fontSize:14,
+            cursor:'pointer', lineHeight:1 }}>
+          🎙️
+        </button>
         <button onClick={() => doSearch(query)} disabled={searching || !query.trim()} style={{
           position:'absolute', right:6, top:'50%', transform:'translateY(-50%)',
           padding:'7px 18px', background: query.trim() ? 'var(--y)' : 'var(--s2)',
@@ -1238,15 +1193,7 @@ export default function SolutionCentre({ showToast, user }) {
           {!loading && (
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(300px, 1fr))', gap:14 }}>
               {/* AI Answer */}
-              <AIBanner
-                answer={ragResult?.answer || aiAnswer}
-                sources={ragResult?.sources}
-                fallback={ragResult?.fallback}
-                similarity={ragResult?.similarity}
-                loading={searching}
-                onClear={() => { setAiAnswer(null); setRagResult(null); }}
-                onViewSource={(id) => loadDetail(id)}
-              />
+              <AIBanner answer={aiAnswer} loading={searching} onClear={() => setAiAnswer(null)} />
 
               {/* Empty state */}
               {displayed.length === 0 && !searching && (
@@ -1279,5 +1226,20 @@ export default function SolutionCentre({ showToast, user }) {
         </div>
       </div>
     </div>
+
+      {showVoice && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:9999, display:'flex', alignItems:'flex-end', justifyContent:'center', padding:16 }}>
+          <div style={{ background:'var(--s1)', border:'1px solid var(--b2)', borderRadius:24, padding:24, width:'100%', maxWidth:480, position:'relative' }}>
+            <button onClick={() => setShowVoice(false)} style={{ position:'absolute', top:12, right:16, background:'none', border:'none', color:'var(--tm)', fontSize:20, cursor:'pointer' }}>✕</button>
+            <p style={{ color:'var(--y)', fontWeight:700, marginBottom:8 }}>🎙️ Assistente de Voz</p>
+            <p style={{ color:'var(--tm)', fontSize:12 }}>
+              {(window.SpeechRecognition || window.webkitSpeechRecognition)
+                ? '✅ SpeechRecognition disponível — use o painel AI Obs para o assistente completo.'
+                : '⚠️ Use Chrome para suporte de voz.'}
+            </p>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

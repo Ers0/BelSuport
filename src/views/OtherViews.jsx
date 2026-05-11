@@ -7,9 +7,7 @@ export function Produtos({ showToast, user }) {
   const [cats, setCats]   = useState([]);
   const [selCat, setSelCat] = useState(null);
   const [newCat, setNewCat] = useState('');
-  const [newFab, setNewFab]     = useState('');
-  const [fabHasFicha, setFabHasFicha] = useState(true);
-  const [fabAuditFields, setFabAuditFields] = useState('');
+  const [newFab, setNewFab] = useState('');
   const [showCatForm, setShowCatForm] = useState(false);
   const [showFabForm, setShowFabForm] = useState(false);
   const [stats, setStats] = useState([]);
@@ -44,14 +42,8 @@ export function Produtos({ showToast, user }) {
   }
   async function addFab() {
     if (!newFab.trim() || !selCat) return;
-    await api('/api/products/fabricante', { method:'POST', body: JSON.stringify({
-      nome:          newFab,
-      categoria_id:  selCat.id,
-      has_ficha:     fabHasFicha,
-      audit_fields:  fabAuditFields.split(',').map(s=>s.trim()).filter(Boolean),
-    }) });
-    setNewFab(''); setFabHasFicha(true); setFabAuditFields('');
-    setShowFabForm(false); load();
+    await api('/api/products/fabricante', { method:'POST', body: JSON.stringify({ nome: newFab, categoria_id: selCat.id }) });
+    setNewFab(''); setShowFabForm(false); load();
   }
   async function delCat(id) {
     if (!confirm('Remover categoria?')) return;
@@ -160,46 +152,10 @@ export function Produtos({ showToast, user }) {
             {isAdmin && selCat && <Btn variant="primary" style={{ fontSize:12, padding:'7px 14px' }} onClick={() => setShowFabForm(v=>!v)}>+ Adicionar</Btn>}
           </div>
           {showFabForm && (
-            <div style={{ padding:'12px', borderBottom:'1px solid var(--b1)', background:'var(--s2)' }}>
-              <div style={{ display:'flex', gap:6, marginBottom:8 }}>
-                <input value={newFab} onChange={e=>setNewFab(e.target.value)} placeholder="Nome do fabricante" style={{ flex:1, fontSize:12 }} />
-                <Btn variant="primary" style={{ fontSize:12, padding:'7px 12px' }} onClick={addFab}>Salvar</Btn>
-                <Btn variant="ghost"   style={{ fontSize:12, padding:'7px 10px' }} onClick={() => setShowFabForm(false)}>✕</Btn>
-              </div>
-              {/* Ficha toggle */}
-              <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
-                <label style={{ display:'flex', alignItems:'center', gap:7, cursor:'pointer', fontSize:12, color:'var(--ts)' }}>
-                  <div onClick={() => setFabHasFicha(v=>!v)} style={{
-                    width:36, height:20, borderRadius:999, position:'relative', cursor:'pointer',
-                    background: fabHasFicha ? 'var(--gr)' : 'var(--s3)',
-                    border:'1px solid var(--b2)', transition:'background .2s',
-                  }}>
-                    <div style={{
-                      position:'absolute', top:2, left: fabHasFicha ? 18 : 2,
-                      width:14, height:14, borderRadius:'50%', background:'#fff',
-                      transition:'left .2s', boxShadow:'0 1px 3px rgba(0,0,0,.3)',
-                    }} />
-                  </div>
-                  Possui ficha de garantia
-                </label>
-              </div>
-              {/* Custom audit fields */}
-              <div style={{ fontSize:11, color:'var(--tm)', marginBottom:4 }}>
-                Documentos adicionais na auditoria (separados por vírgula):
-              </div>
-              <input
-                value={fabAuditFields}
-                onChange={e=>setFabAuditFields(e.target.value)}
-                placeholder="Ex: Laudo técnico, Foto placa, Diagrama elétrico"
-                style={{ fontSize:11 }}
-              />
-              {fabAuditFields && (
-                <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginTop:6 }}>
-                  {fabAuditFields.split(',').map(s=>s.trim()).filter(Boolean).map((f,i) => (
-                    <span key={i} style={{ fontSize:10, background:'rgba(96,165,250,.1)', color:'var(--bl)', padding:'2px 8px', borderRadius:999 }}>{f}</span>
-                  ))}
-                </div>
-              )}
+            <div style={{ display:'flex', gap:6, padding:'10px 12px', borderBottom:'1px solid var(--b1)' }}>
+              <input value={newFab} onChange={e=>setNewFab(e.target.value)} placeholder="Nome do fabricante" onKeyDown={e=>e.key==='Enter'&&addFab()} style={{ flex:1 }} />
+              <Btn variant="primary" style={{ fontSize:12, padding:'7px 12px' }} onClick={addFab}>Salvar</Btn>
+              <Btn variant="ghost"   style={{ fontSize:12, padding:'7px 10px' }} onClick={() => setShowFabForm(false)}>✕</Btn>
             </div>
           )}
           <div style={{ padding:'8px', minHeight:80 }}>
@@ -207,7 +163,6 @@ export function Produtos({ showToast, user }) {
             {selCat && (selCat.fabricantes||[]).length === 0 && <div style={{ textAlign:'center', color:'var(--tm)', padding:'28px 0', fontSize:13 }}>Nenhum fabricante cadastrado</div>}
             {(selCat?.fabricantes||[]).map(fab => {
               const count = casesByFab[fab.nome] || 0;
-              const hasFicha = fab.has_ficha !== false; // default true
               const maxF  = Math.max(...(selCat.fabricantes||[]).map(f=>casesByFab[f.nome]||0),1);
               return (
                 <div key={fab.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 10px', borderRadius:'var(--rs)', marginBottom:2 }}>
@@ -1282,10 +1237,6 @@ function ApprovalManager({ user, showToast }) {
 
 // ── Configuracoes ─────────────────────────────────────────────────────────────
 export function Configuracoes({ showToast, user }) {
-  const [sheetsUrl, setSheetsUrl] = React.useState(null);
-  React.useEffect(() => {
-    api('/api/sheets/link').then(r => { if (r.url) setSheetsUrl(r.url); }).catch(()=>{});
-  }, []);
   const [cfg, setCfg]     = useState({});
   const [saved, setSaved] = useState('');
   const isAdmin = user?.role === 'master' || user?.role === 'admin';
@@ -1333,6 +1284,9 @@ export function Configuracoes({ showToast, user }) {
           </Field>
           <Field label="ID da pasta do Centro de Soluções" hint="Pasta dedicada para imagens e vídeos do Centro de Soluções. Deixe vazio para usar a pasta mestre.">
             <input value={cfg.solutionsDriveId||''} onChange={e=>set('solutionsDriveId',e.target.value)} placeholder="1abc...xyz (opcional)" />
+          </Field>
+          <Field label="ID da pasta de Manuais e Datasheets" hint="Estrutura: Deye/Inversor/Manual.pdf — usada pela IA como fallback quando não encontra solução indexada.">
+            <input value={cfg.manualsDriveId||''} onChange={e=>set('manualsDriveId',e.target.value)} placeholder="1abc...xyz (opcional)" />
           </Field>
           <div style={{ fontSize:12, color: cfg.has_drive_auth ? 'var(--gr)' : 'var(--tm)', marginBottom:8 }}>
             {cfg.has_drive_auth ? '✅ Drive autenticado' : '⚠️ Drive não autenticado'}
@@ -1391,59 +1345,17 @@ export function Configuracoes({ showToast, user }) {
       {/* User Approval Management — master and admin */}
       <ApprovalManager user={user} showToast={showToast} />
 
-      {/* ── Exportações ─────────────────────────────────────────────────── */}
-      <Card style={{ padding:'20px', marginBottom:14 }}>
-        <div style={{ fontSize:11, fontWeight:700, color:'var(--tm)', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:14 }}>
-          📤 Exportações
-        </div>
-        <div style={{ display:'flex', gap:12, flexWrap:'wrap' }}>
-          <div style={{ flex:1, minWidth:240, padding:'14px 16px', background:'var(--s2)', borderRadius:'var(--rs)', border:'1px solid var(--b1)' }}>
-            <div style={{ fontSize:13, fontWeight:700, marginBottom:4 }}>📊 Google Sheets</div>
-            <div style={{ fontSize:12, color:'var(--tm)', marginBottom:8, lineHeight:1.5 }}>
-              Planilha atualizada automaticamente todo dia às 17h15. Inclui chamados, clientes, agenda, soluções e gráficos.
-            </div>
-            {sheetsUrl && (
-              <a href={sheetsUrl} target="_blank" rel="noreferrer" style={{
-                display:'inline-flex', alignItems:'center', gap:6, fontSize:11.5,
-                color:'var(--gr)', marginBottom:10, textDecoration:'none', fontWeight:600,
-              }}>📎 Abrir planilha existente →</a>
-            )}
-            <div style={{ display:'flex', gap:8 }}>
-              <Btn variant="primary" style={{ fontSize:12, padding:'8px 18px' }} onClick={async () => {
-                try {
-                  showToast('Atualizando planilha...', 'info', 5000);
-                  const res = await api('/api/sheets/export', { method:'POST' });
-                  if (res.url) { setSheetsUrl(res.url); window.open(res.url, '_blank'); showToast(res.isNew ? '✅ Planilha criada!' : '✅ Planilha atualizada!'); }
-                } catch(e) { showToast('❌ ' + e.message, 'warn'); }
-              }}>
-                {sheetsUrl ? '🔄 Atualizar agora' : '📊 Criar planilha'}
-              </Btn>
-            </div>
-          </div>
-
-          <div style={{ flex:1, minWidth:240, padding:'14px 16px', background:'var(--s2)', borderRadius:'var(--rs)', border:'1px solid var(--b1)' }}>
-            <div style={{ fontSize:13, fontWeight:700, marginBottom:4 }}>📄 Relatório HTML</div>
-            <div style={{ fontSize:12, color:'var(--tm)', marginBottom:12, lineHeight:1.5 }}>
-              Abre o relatório do dashboard no navegador. Use Ctrl+P para salvar como PDF.
-            </div>
-            <div style={{ display:'flex', gap:6 }}>
-              {['daily','weekly','monthly'].map(p => (
-                <a key={p} href={`/api/reports/dashboard?period=${p}&token=${localStorage.getItem('session_token')}`}
-                  target="_blank" rel="noreferrer"
-                  style={{ fontSize:11.5, fontWeight:600, padding:'7px 12px', borderRadius:'var(--rs)',
-                    background:'var(--s3)', border:'1px solid var(--b2)', color:'var(--tm)',
-                    textDecoration:'none', display:'inline-block' }}>
-                  {p === 'daily' ? 'Hoje' : p === 'weekly' ? 'Semana' : 'Mês'}
-                </a>
-              ))}
-            </div>
-          </div>
-        </div>
-      </Card>
-
       <div style={{ display:'flex', alignItems:'center', gap:14 }}>
         <Btn variant="primary" style={{ padding:'13px 40px' }} onClick={save}>Salvar Configurações</Btn>
         {saved && <span style={{ fontSize:13, color: saved.startsWith('✅') ? 'var(--gr)' : 'var(--re)' }}>{saved}</span>}
+        <Btn variant="ghost" style={{ padding:'13px 20px', marginLeft:'auto' }} onClick={async () => {
+          try {
+            const res = await api('/api/sheets/export', { method:'POST' });
+            if (res.url) window.open(res.url, '_blank');
+          } catch(e) { showToast('Erro ao exportar: '+e.message, 'warn'); }
+        }}>
+          📊 Exportar para Google Sheets
+        </Btn>
       </div>
     </div>
   );

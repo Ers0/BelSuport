@@ -1,8 +1,6 @@
 const express = require('express');
 const router  = express.Router();
-const { supabaseAdmin } = require('../services/db');
-const { encryptFields, decryptFields, keyFromReq, getMasterKey, ENCRYPTED_FIELDS } = require('../services/crypto');
-const EF = ENCRYPTED_FIELDS.settings_user; 
+const { supabaseAdmin } = require('../services/db'); 
 
 const ADMIN_EMAILS = ['eros.belenergy@gmail.com'];
 
@@ -33,10 +31,6 @@ router.get('/', async (req, res) => {
     console.log("✅ Busca finalizada. Enviando para o App.");
 
     // Manda tudo junto para o Front-end
-    // Decrypt user settings fields
-    const masterKey = getMasterKey();
-    const ud = u ? decryptFields(u, EF, masterKey) : {};
-
     res.json({
       tesseractPath: g?.tesseract_path || '',
       popplerPath:   g?.poppler_path || '',
@@ -45,13 +39,17 @@ router.get('/', async (req, res) => {
       jiraUrl:       g?.jira_url || '',
       jiraProject:   g?.jira_project || '',
       jiraType:      g?.jira_type || 'Task',
-      jiraEmail:     ud?.jira_email || '',
-      jiraToken:     ud?.jira_token || '',
-      driveId:           ud?.drive_id || '',
-      solutionsDriveId:  ud?.solutions_drive_id || '',
-      fabricantes:   g?.fabricantes || [],
-      jiraBoards:    g?.jira_boards || [],
-      has_drive_auth: !!u?.google_token,
+      jiraEmail:     u?.jira_email || '',
+      jiraToken:     u?.jira_token || '',
+      driveId:            u?.drive_id || '',
+      solutionsDriveId:   u?.solutions_drive_id || '',
+      manualsDriveId:     g?.manuals_drive_id   || '',
+      fabricantes:      g?.fabricantes || [],
+      jiraBoards:       g?.jira_boards || [],   // ← was missing from GET
+      
+      // 🚨 O GRANDE TRUQUE AQUI: 
+      // Se houver qualquer coisa no campo google_token, retorna true. Senão, false.
+      has_drive_auth: !!u?.google_token 
     });
 
   } catch (err) {
@@ -70,18 +68,16 @@ router.post('/', async (req, res) => {
       console.log(`⏳ [DEBUG] Salvando dados de: ${userEmail}`);
   
       // 1. Tenta salvar User Settings
-      const masterKey = getMasterKey();
-      const rawUser = {
-        user_id:             userId,
-        drive_id:            b.driveId,
-        solutions_drive_id:  b.solutionsDriveId || null,
-        jira_email:          b.jiraEmail,
-        jira_token:          b.jiraToken,
-        updated_at:          new Date()
-      };
       const { error: uErr } = await supabaseAdmin
         .from('settings_user')
-        .upsert(encryptFields(rawUser, EF, masterKey));
+        .upsert({
+          user_id:             userId,
+          drive_id:            b.driveId,
+          solutions_drive_id:  b.solutionsDriveId || null,
+          jira_email:          b.jiraEmail,
+          jira_token:          b.jiraToken,
+          updated_at:          new Date()
+        });
   
       if (uErr) throw new Error("Erro User Settings: " + uErr.message);
   
