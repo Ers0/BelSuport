@@ -68,8 +68,7 @@ app.use('/api/reminders',     safeRoute('./routes/reminders'));
 app.use('/api/analysis',      safeRoute('./routes/analysis'));
 app.use('/api/knowledge',     safeRoute('./routes/knowledge'));
 app.use('/api/notifications', safeRoute('./routes/notifications'));
-app.use('/api/contacts',      safeRoute('./routes/contacts'));
-app.use('/api/contacts',      safeRoute('./routes/contacts'));
+app.use('/api/ai-obs',        safeRoute('./routes/ai-obs'));
 
 // 7. Inicialização
 startWatcher();

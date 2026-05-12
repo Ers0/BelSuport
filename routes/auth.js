@@ -489,10 +489,6 @@ router.post('/logout', async (req, res) => {
 });
 
 // Exportamos apenas o router (que agora contém o middleware dentro dele)
-module.exports = {
-  router: router,
-  authMiddleware: authMiddleware // Exporte a função explicitamente
-};
 // ── GET /api/auth/approvals — list pre-approved emails (master + admin) ───────
 router.get('/approvals', authMiddleware, async (req, res) => {
   try {
@@ -716,3 +712,8 @@ router.post('/access-requests/:id', authMiddleware, async (req, res) => {
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+module.exports = {
+  router,
+  authMiddleware,
+};

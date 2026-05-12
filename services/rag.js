@@ -114,7 +114,9 @@ function buildSystemPrompt(chunks) {
     lines.push('');
   });
 
-  lines.push('=== FIM DAS SOLUCOES ===');
+  lines.push('=== FIM DAS SOLUCOES — NAO USE NADA ALEM DESTE BLOCO ===',
+    'LEMBRETE: Apenas o que esta escrito acima pode ser usado na resposta.',
+    '');
   lines.push('');
   lines.push('TEMPLATE DE RESPOSTA:');
   lines.push('## Diagnostico Tecnico');

@@ -15,6 +15,22 @@ const driveRoutes  = require('../routes/drive');
 
 const app = express();
 
+// Safe require — prevents one bad route from crashing the whole function
+function safeRoute(routePath) {
+  try {
+    return require(routePath);
+  } catch (err) {
+    console.error('[Vercel] Failed to load route:', routePath, err.message);
+    const r = express.Router();
+    r.all('*', (req, res) => res.status(503).json({
+      error: 'Rota temporariamente indisponivel',
+      route: routePath.split('/').pop(),
+      detail: err.message,
+    }));
+    return r;
+  }
+}
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -32,21 +48,21 @@ app.use((req, res, next) => {
 // ── Routes available in cloud mode ───────────────────────────────────────────
 app.use('/api/auth',     authRoutes.router);
 app.use('/api/drive',    driveRoutes);
-app.use('/api/cases',         require('../routes/cases'));
-app.use('/api/products',      require('../routes/products'));
-app.use('/api/settings',      require('../routes/settings'));
-app.use('/api/jira',          require('../routes/jira'));
-app.use('/api/sheets',        require('../routes/sheets'));
-app.use('/api/reports',       require('../routes/reports'));
-app.use('/api/solutions',     require('../routes/solutions'));
-app.use('/api/reminders',     require('../routes/reminders'));
-app.use('/api/notifications', require('../routes/notifications'));
-app.use('/api/clients',       require('../routes/clients'));
-app.use('/api/events',        require('../routes/events'));
-app.use('/api/equipment',     require('../routes/equipment'));
-app.use('/api/analysis',      require('../routes/analysis'));
-app.use('/api/knowledge',     require('../routes/knowledge'));
-app.use('/api/contacts',      require('../routes/contacts'));
+app.use('/api/cases',         safeRoute('../routes/cases'));
+app.use('/api/products',      safeRoute('../routes/products'));
+app.use('/api/settings',      safeRoute('../routes/settings'));
+app.use('/api/jira',          safeRoute('../routes/jira'));
+app.use('/api/sheets',        safeRoute('../routes/sheets'));
+app.use('/api/reports',       safeRoute('../routes/reports'));
+app.use('/api/solutions',     safeRoute('../routes/solutions'));
+app.use('/api/reminders',     safeRoute('../routes/reminders'));
+app.use('/api/notifications', safeRoute('../routes/notifications'));
+app.use('/api/clients',       safeRoute('../routes/clients'));
+app.use('/api/events',        safeRoute('../routes/events'));
+app.use('/api/equipment',     safeRoute('../routes/equipment'));
+app.use('/api/analysis',      safeRoute('../routes/analysis'));
+app.use('/api/knowledge',     safeRoute('../routes/knowledge'));
+app.use('/api/ai-obs',        safeRoute('../routes/ai-obs'));
 
 // ── Routes DISABLED in cloud mode ────────────────────────────────────────────
 // /api/files  — local folder scanning (no filesystem on Vercel)

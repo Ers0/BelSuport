@@ -3,14 +3,15 @@ import React from 'react';
 const NAV = [
   { id:'registro',      icon:'📋', label:'Registro' },
   { id:'dashboard',     icon:'📊', label:'Dashboard' },
+  { id:'agenda',        icon:'📅', label:'Agenda' },
   { id:'clientes',      icon:'👥', label:'Clientes' },
   { id:'solutions',     icon:'🔬', label:'Soluções' },
-  { id:'diagnostico',   icon:'🔬', label:'Diagnóstico' },
+  { id:'diagnostico',   icon:'🧠', label:'Diagnóstico' },
   { id:'produtos',      icon:'📦', label:'Produtos' },
   { id:'historico',     icon:'🕘', label:'Histórico' },
   { id:'jira',          icon:'🔗', label:'Jira' },
   { id:'configuracoes', icon:'⚙️', label:'Configurações' },
-  { id:'ai_obs',        icon:'🧠', label:'AI Obs',       roles:['master','admin'] },
+  { id:'ai_obs',        icon:'🤖', label:'AI Obs',       roles:['master','admin'] },
 ];
 
 export default function Sidebar({ view, setView, user, onLogout, lastUpdate, onExportCSV, folders, selectedFolder, onFolderChange, notificationBell, watcherStatus }) {

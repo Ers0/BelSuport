@@ -6,6 +6,16 @@ const express = require('express');
 const router  = express.Router();
 const { supabaseAdmin } = require('../services/db');
 
+// ── RAG pipeline — graceful load (Ollama may not be running in cloud) ─────────
+let _ragQuery = null, _buildQuery = null;
+try {
+  const rag = require('../services/rag');
+  _ragQuery  = rag.ragQuery;
+  _buildQuery = rag.buildQuery;
+} catch (e) {
+  console.warn('[Analysis] RAG service not available:', e.message);
+}
+
 // ── Text clustering helpers ───────────────────────────────────────────────────
 
 // Stop words to ignore when building keyword frequency
