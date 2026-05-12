@@ -1,4 +1,6 @@
 // api/index.js — Vercel serverless entry point
+// NOTE: require() paths MUST be string literals for Vercel's bundler.
+// Dynamic require(variable) paths are not resolved at build time.
 require('dotenv').config();
 process.env.CLOUD_MODE = 'true';
 
@@ -8,80 +10,73 @@ const cookieParser = require('cookie-parser');
 
 const app = express();
 
-// ── Middleware ─────────────────────────────────────────────────────────────────
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 
-// safeRoute — loads a route module; returns a 503 handler if it fails to load
-// This prevents ONE broken route from crashing ALL routes
-function safeRoute(p) {
-  try {
-    return require(p);
-  } catch (err) {
-    console.error('[index.js] Route load failed:', p, '|', err.message);
-    const r = express.Router();
-    r.all('*', (req, res) =>
-      res.status(503).json({ error: 'Servico temporariamente indisponivel', detail: err.message })
-    );
-    return r;
-  }
+// ── Load auth (required for middleware — must succeed) ────────────────────────
+let authRouter, authMiddleware;
+try {
+  const auth = require('../routes/auth');
+  authRouter     = auth.router;
+  authMiddleware = auth.authMiddleware;
+} catch (err) {
+  console.error('[CRITICAL] auth route failed to load:', err.message);
+  authMiddleware = (req, res, next) => next(); // passthrough — let routes handle auth themselves
+  authRouter     = express.Router();
+  authRouter.all('*', (req, res) => res.status(503).json({ error: 'Auth service unavailable' }));
 }
 
-// Auth and Drive loaded separately (they export named properties)
-const authRoutes  = safeRoute('../routes/auth');
-const driveRoutes = safeRoute('../routes/drive');
+app.use(authMiddleware);
 
-// Auth middleware — must run before all routes
-app.use((req, res, next) => {
-  try {
-    if (typeof authRoutes.authMiddleware === 'function') {
-      return authRoutes.authMiddleware(req, res, next);
-    }
-    next();
-  } catch (err) {
-    console.error('[Auth middleware crash]', err.message);
-    next();
-  }
-});
-
-// Request logger
 app.use((req, res, next) => {
   if (req.path.startsWith('/api'))
     console.log(`[${req.method}] ${req.path} | ${req.user?.email || 'anon'}`);
   next();
 });
 
-// ── Routes ────────────────────────────────────────────────────────────────────
-app.use('/api/auth',          authRoutes.router || authRoutes);
-app.use('/api/drive',         driveRoutes.router || driveRoutes);
-app.use('/api/cases',         safeRoute('../routes/cases'));
-app.use('/api/products',      safeRoute('../routes/products'));
-app.use('/api/settings',      safeRoute('../routes/settings'));
-app.use('/api/jira',          safeRoute('../routes/jira'));
-app.use('/api/sheets',        safeRoute('../routes/sheets'));
-app.use('/api/reports',       safeRoute('../routes/reports'));
-app.use('/api/solutions',     safeRoute('../routes/solutions'));
-app.use('/api/reminders',     safeRoute('../routes/reminders'));
-app.use('/api/notifications', safeRoute('../routes/notifications'));
-app.use('/api/clients',       safeRoute('../routes/clients'));
-app.use('/api/events',        safeRoute('../routes/events'));
-app.use('/api/equipment',     safeRoute('../routes/equipment'));
-app.use('/api/analysis',      safeRoute('../routes/analysis'));
-app.use('/api/knowledge',     safeRoute('../routes/knowledge'));
-app.use('/api/ai-obs',        safeRoute('../routes/ai-obs'));
-app.use('/api/contacts',      safeRoute('../routes/contacts'));
+// ── Route loader — static literal paths so Vercel bundler resolves them ───────
+function mountRoute(path, loader) {
+  let handler;
+  try   { handler = loader(); }
+  catch (err) {
+    console.error('[Route load failed]', path, '|', err.message);
+    handler = express.Router();
+    handler.all('*', (req, res) =>
+      res.status(503).json({ error: 'Rota temporariamente indisponivel', detail: err.message })
+    );
+  }
+  app.use(path, handler);
+}
+
+// Each loader is an arrow function with a LITERAL require() — bundler can resolve these
+mountRoute('/api/auth',          () => authRouter);
+mountRoute('/api/drive',         () => require('../routes/drive'));
+mountRoute('/api/cases',         () => require('../routes/cases'));
+mountRoute('/api/products',      () => require('../routes/products'));
+mountRoute('/api/settings',      () => require('../routes/settings'));
+mountRoute('/api/jira',          () => require('../routes/jira'));
+mountRoute('/api/sheets',        () => require('../routes/sheets'));
+mountRoute('/api/reports',       () => require('../routes/reports'));
+mountRoute('/api/solutions',     () => require('../routes/solutions'));
+mountRoute('/api/reminders',     () => require('../routes/reminders'));
+mountRoute('/api/notifications', () => require('../routes/notifications'));
+mountRoute('/api/clients',       () => require('../routes/clients'));
+mountRoute('/api/events',        () => require('../routes/events'));
+mountRoute('/api/equipment',     () => require('../routes/equipment'));
+mountRoute('/api/analysis',      () => require('../routes/analysis'));
+mountRoute('/api/knowledge',     () => require('../routes/knowledge'));
+mountRoute('/api/ai-obs',        () => require('../routes/ai-obs'));
+mountRoute('/api/contacts',      () => require('../routes/contacts'));
 
 // Files disabled in cloud
 app.use('/api/files', (req, res) =>
   res.status(503).json({ error: 'Nao disponivel no modo cloud', cloud_mode: true })
 );
 
-// 404
 app.use((req, res) => res.status(404).json({ error: 'Rota nao encontrada' }));
 
-// Error handler
 app.use((err, req, res, next) => {
   console.error('[Server Error]', err.message);
   res.status(500).json({ error: err.message });
