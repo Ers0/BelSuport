@@ -87,51 +87,51 @@ function rankAndFilter(chunks, queryMeta) {
 function buildSystemPrompt(chunks) {
   const today = new Date().toLocaleDateString('pt-BR');
 
-  const lines = [
-    'Voce e o assistente tecnico senior da Belenergy, especializado em inversores solares e BESS.',
-    'Data: ' + today,
+  // Format each solution as a clearly delimited block
+  const solutionBlocks = chunks.map((c, i) => {
+    const pct = Math.round((c.score || 0) * 100);
+    return [
+      `╔═ SOLUCAO ${i + 1} [relevancia: ${pct}%] ══════════════════`,
+      `Titulo: ${c.title}`,
+      `Marca: ${c.brand || 'Geral'}`,
+      `──────────────────────────────────────────`,
+      `${c.content || '(sem conteudo)'}`,
+      `╚══════════════════════════════════════════`,
+    ].join('\n');
+  }).join('\n\n');
+
+  return [
+    'Voce e um assistente tecnico da Belenergy. Data: ' + today,
     '',
-    'REGRAS ABSOLUTAS:',
-    '1. Use SOMENTE o conteudo das solucoes verificadas abaixo. ZERO conhecimento externo.',
-    '2. NAO invente fabricantes, modelos, codigos de erro, valores ou procedimentos.',
-    '3. Se a solucao nao cobrir a pergunta: escreva "informacao nao disponivel na base".',
-    '4. NAO elabore alem do que esta escrito. Reestruture - nao crie.',
-    '5. Cite sempre: "conforme Solucao 1", "de acordo com Solucao 2", etc.',
-    '6. Responda em Portugues, formato Markdown.',
+    'INSTRUCAO PRINCIPAL:',
+    'Abaixo estao as UNICAS solucoes disponiveis na base de conhecimento.',
+    'Voce DEVE responder usando EXCLUSIVAMENTE o texto dessas solucoes.',
+    'NAO adicione nenhuma informacao que nao esteja escrita abaixo.',
+    'NAO expanda, NAO explique, NAO complete — apenas reformate o que esta escrito.',
     '',
-    '=== SOLUCOES VERIFICADAS ===',
-  ];
-
-  chunks.forEach(function(c, i) {
-    var snippet = (c.content || '');
-    if (snippet.length > MAX_SNIPPET) snippet = snippet.slice(0, MAX_SNIPPET) + '...';
-    var pct = Math.round((c.score || 0) * 100);
-    lines.push('--- SOLUCAO ' + (i + 1) + ' (relevancia: ' + pct + '%) ---');
-    lines.push('Titulo: ' + c.title);
-    lines.push('Marca: ' + (c.brand || 'Geral'));
-    lines.push('Conteudo:');
-    lines.push(snippet);
-    lines.push('');
-  });
-
-  lines.push('=== FIM DAS SOLUCOES — NAO USE NADA ALEM DESTE BLOCO ===',
-    'LEMBRETE: Apenas o que esta escrito acima pode ser usado na resposta.',
-    '');
-  lines.push('');
-  lines.push('TEMPLATE DE RESPOSTA:');
-  lines.push('## Diagnostico Tecnico');
-  lines.push('[Analise baseada nas solucoes - cite a fonte]');
-  lines.push('');
-  lines.push('## Procedimento de Resolucao');
-  lines.push('[Passos EXATOS das solucoes - nao adicione]');
-  lines.push('');
-  lines.push('## Resposta para o Cliente');
-  lines.push('[Resumo em linguagem acessivel]');
-  lines.push('');
-  lines.push('## Fonte');
-  lines.push('[Titulos das solucoes utilizadas]');
-
-  return lines.join('\n');
+    '=== SOLUCOES DISPONIVEIS ===',
+    solutionBlocks,
+    '=== FIM DAS SOLUCOES ===',
+    '',
+    'REGRAS DE RESPOSTA:',
+    '1. Se a solucao cobrir a pergunta: reformate o conteudo da solucao no template abaixo.',
+    '2. Se a solucao NAO cobrir completamente: escreva APENAS o que estiver na solucao e adicione "⚠️ Informacao parcial — consulte o fabricante para o restante."',
+    '3. Para cada frase que escrever: ela DEVE estar baseada no texto das solucoes acima.',
+    '4. PROIBIDO escrever passos que nao estejam na solucao. PROIBIDO inventar causas ou procedimentos.',
+    '',
+    'TEMPLATE DE RESPOSTA:',
+    '## Diagnóstico Técnico',
+    '[Copie a causa da solucao — se nao houver, escreva "Causa nao especificada na base"]',
+    '',
+    '## Procedimento de Resolucao',
+    '[Copie os passos EXATOS da solucao — nada mais, nada menos]',
+    '',
+    '## Observacoes',
+    '[Copie as observacoes da solucao — se nao houver, omita esta secao]',
+    '',
+    '## Fonte',
+    '[Titulo da solucao utilizada]',
+  ].join('\n');
 }
 
 // ── 5. GENERATE ───────────────────────────────────────────────────────────────

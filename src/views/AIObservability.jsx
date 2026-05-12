@@ -515,12 +515,12 @@ export default function AIObservability({ showToast }) {
 
           <button onClick={checkProviderHealth} disabled={healthChk}
             style={{ padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', background: C.s3, border: `1px solid ${C.b2}`, color: C.ts }}>
-            {healthChk ? '⟳ Verificando...' : '🔌 Health Check'}
+            {healthChk ? '⟳ Verificando...' : '🔌 Verificar Saúde'}
           </button>
 
           <button onClick={() => setShowVoice(true)}
             style={{ padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', background: C.bl + '20', border: `1px solid ${C.bl}44`, color: C.bl }}>
-            🎙️ Teste de Voz
+            🎙️ Testar Voz
           </button>
 
           <button onClick={load}
@@ -534,7 +534,7 @@ export default function AIObservability({ showToast }) {
       {health && (
         <Card style={{ marginBottom: 16, padding: '14px 20px' }}>
           <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.tm, letterSpacing: '.04em' }}>PROVIDER HEALTH</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.tm, letterSpacing: '.04em' }}>SAÚDE DOS PROVIDERS</div>
             {[
               { key: 'groq',   label: '⚡ Groq',   color: C.groq   },
               { key: 'gemini', label: '✦ Gemini', color: C.gemini },
@@ -560,12 +560,12 @@ export default function AIObservability({ showToast }) {
       {/* ── Hero stats ───────────────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 20 }}>
         {[
-          { label: 'Total Requests', value: totalReq.toLocaleString(), icon: '📊', color: C.tx },
+          { label: 'Total de Requisições', value: totalReq.toLocaleString(), icon: '📊', color: C.tx },
           { label: 'Taxa de Sucesso', value: successRate + '%', icon: '✅', color: successRate >= 95 ? C.gr : successRate >= 85 ? C.y : C.re, sub: `${errorCnt} erros` },
           { label: 'Latência Média', value: (stats?.avg_latency_ms || 0) + 'ms', icon: '⚡', color: (stats?.avg_latency_ms || 0) < 3000 ? C.gr : C.or },
-          { label: 'Fallbacks', value: fallbackCnt.toString(), icon: '🔄', color: fallbackCnt > 0 ? C.or : C.gr, sub: 'Groq → Gemini' },
+          { label: 'Fallbacks Groq→Gemini', value: fallbackCnt.toString(), icon: '🔄', color: fallbackCnt > 0 ? C.or : C.gr, sub: 'Groq → Gemini' },
           { label: 'Interações de Voz', value: voiceCnt.toString(), icon: '🎙️', color: C.bl },
-          { label: 'Manual RAG', value: manualCnt.toString(), icon: '📖', color: C.pu, sub: 'fallback a manuais' },
+          { label: 'Manual RAG', value: manualCnt.toString(), icon: '📖', color: C.pu, sub: 'fallback para manuais' },
         ].map(s => (
           <Card key={s.label} glow={s.color !== C.tx && s.color}>
             <Stat {...s} loading={loading} />
@@ -641,7 +641,7 @@ export default function AIObservability({ showToast }) {
 
         {/* Top queries */}
         <Card>
-          <div style={{ fontWeight: 700, color: C.tx, fontSize: 13, marginBottom: 12 }}>🔍 Falhas Mais Buscadas</div>
+          <div style={{ fontWeight: 700, color: C.tx, fontSize: 13, marginBottom: 12 }}>🔍 Consultas Mais Frequentes</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 160, overflowY: 'auto' }}>
             {topQueries.slice(0, 8).map((q, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -663,13 +663,13 @@ export default function AIObservability({ showToast }) {
           <div>
             <div style={{ fontWeight: 700, color: C.tx, fontSize: 13 }}>📚 Base de Manuais e Datasheets</div>
             <div style={{ fontSize: 11, color: C.tm, marginTop: 2 }}>
-              Diretório: <code style={{ background: C.s3, padding: '1px 5px', borderRadius: 4, fontSize: 10 }}>manuals/[Marca]/[Categoria]/</code>
+              Pasta Google Drive: <code style={{ background: C.s3, padding: '1px 5px', borderRadius: 4, fontSize: 10 }}>manuals/[Marca]/[Categoria]/</code>
             </div>
           </div>
           <button onClick={reindexManuals} disabled={reindexing}
             style={{ padding: '7px 14px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer',
               background: C.pu + '20', border: `1px solid ${C.pu}44`, color: C.pu }}>
-            {reindexing ? '⟳ Indexando...' : '📖 Reindexar Manuais'}
+            {reindexing ? '⟳ Indexando...' : '📖 Reindexar Manuais do Drive'}
           </button>
         </div>
 
@@ -686,7 +686,7 @@ export default function AIObservability({ showToast }) {
             )) : (
               <div style={{ gridColumn: '1/-1', fontSize: 12, color: C.tm, padding: '16px 0', textAlign: 'center' }}>
                 Nenhum manual indexado ainda.<br />
-                <span style={{ fontSize: 11 }}>Adicione PDFs em <code>manuals/Deye/Inversor/</code> e clique em Reindexar.</span>
+                <span style={{ fontSize: 11 }}>Configure o ID da pasta no Google Drive em <b>Configurações → Google Drive → ID da Pasta de Manuais</b>, depois clique em Reindexar.</span>
               </div>
             )}
           </div>
