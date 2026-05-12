@@ -324,11 +324,330 @@ function QuickForm({ initial, onSave, onCancel }) {
 }
 
 // ── Main Agenda view ──────────────────────────────────────────────────────────
+const CATEGORIES = ['Clientes','Fabricantes','Integradores','Fornecedores','Outros'];
+
+const RESULT_MAP = {
+  reached:      { label:'Atendeu',        color:'var(--gr)',  icon:'✅' },
+  no_answer:    { label:'Não atendeu',    color:'var(--tm)',  icon:'📵' },
+  busy:         { label:'Ocupado',        color:'#F59E0B',   icon:'🔴' },
+  left_message: { label:'Deixou recado', color:'var(--bl)',  icon:'📝' },
+  email_sent:   { label:'Email enviado', color:'var(--pu)',  icon:'📧' },
+  whatsapp:     { label:'WhatsApp',      color:'var(--gr)',  icon:'💬' },
+  other:        { label:'Outro',         color:'var(--tm)',  icon:'📞' },
+};
+
+function ContactsTab({ showToast }) {
+  const [entities, setEntities]   = useState([]);
+  const [selected, setSelected]   = useState(null);
+  const [attempts, setAttempts]   = useState([]);
+  const [cases, setCases]         = useState([]);
+  const [catFilter, setCatFilter] = useState('');
+  const [search, setSearch]       = useState('');
+  const [showNewEntity, setShowNewEntity]   = useState(false);
+  const [showNewAttempt, setShowNewAttempt] = useState(false);
+  const [entityForm, setEntityForm] = useState({
+    category:'Clientes', name:'', phone:'', email:'',
+    fabricante_contact_name:'', fabricante_contact_role:'',
+    fabricante_contact_phone:'', notes:'',
+  });
+  const [attemptForm, setAttemptForm] = useState({
+    result:'no_answer', notes:'', chamado_id:'',
+    attempted_at: new Date().toISOString().slice(0,16),
+  });
+  const [loading, setLoading] = useState(false);
+
+  const loadEntities = async () => {
+    const params = new URLSearchParams();
+    if (catFilter) params.set('category', catFilter);
+    if (search)    params.set('q', search);
+    const data = await api(`/api/contacts?${params}`).catch(() => []);
+    setEntities(data);
+  };
+
+  const loadAttempts = async (id) => {
+    setLoading(true);
+    const data = await api(`/api/contacts/${id}/attempts`).catch(() => []);
+    setAttempts(data);
+    setLoading(false);
+  };
+
+  useEffect(() => { loadEntities(); }, [catFilter, search]);
+  useEffect(() => { api('/api/cases').then(d => setCases(d||[])).catch(() => {}); }, []);
+
+  function selectEntity(e) { setSelected(e); loadAttempts(e.id); setShowNewAttempt(false); }
+
+  async function saveEntity() {
+    if (!entityForm.name) return showToast('Nome obrigatório', 'warn');
+    try {
+      await api('/api/contacts', { method:'POST', body: JSON.stringify(entityForm) });
+      showToast('✅ Contato adicionado!');
+      setShowNewEntity(false);
+      setEntityForm({ category:'Clientes', name:'', phone:'', email:'',
+        fabricante_contact_name:'', fabricante_contact_role:'',
+        fabricante_contact_phone:'', notes:'' });
+      loadEntities();
+    } catch(e) { showToast('❌ ' + e.message, 'warn'); }
+  }
+
+  async function saveAttempt() {
+    if (!selected) return;
+    try {
+      const payload = {
+        ...attemptForm,
+        chamado_id:   attemptForm.chamado_id || null,
+        attempted_at: new Date(attemptForm.attempted_at).toISOString(),
+      };
+      await api(`/api/contacts/${selected.id}/attempts`, { method:'POST', body: JSON.stringify(payload) });
+      showToast('✅ Tentativa registrada!');
+      setShowNewAttempt(false);
+      setAttemptForm({ result:'no_answer', notes:'', chamado_id:'', attempted_at: new Date().toISOString().slice(0,16) });
+      loadAttempts(selected.id);
+      loadEntities();
+    } catch(e) { showToast('❌ ' + e.message, 'warn'); }
+  }
+
+  async function deleteAttempt(id) {
+    if (!confirm('Remover tentativa?')) return;
+    await api(`/api/contacts/attempts/${id}`, { method:'DELETE' }).catch(() => {});
+    loadAttempts(selected.id);
+  }
+
+  const setE = (k, v) => setEntityForm(f => ({...f, [k]:v}));
+  const setA = (k, v) => setAttemptForm(f => ({...f, [k]:v}));
+  const filtered = entities.filter(e =>
+    (!search    || (e.name||'').toLowerCase().includes(search.toLowerCase())) &&
+    (!catFilter || e.category === catFilter)
+  );
+
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'280px 1fr', gap:16, alignItems:'start' }}>
+      {/* Left — entity list */}
+      <div>
+        <div style={{ display:'flex', gap:6, marginBottom:8 }}>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="🔍 Buscar..." style={{ flex:1, fontSize:12 }} />
+          <button onClick={() => setShowNewEntity(v=>!v)} style={{
+            padding:'7px 10px', background:'var(--y)', color:'#000', border:'none',
+            borderRadius:'var(--rs)', fontWeight:700, fontSize:11, cursor:'pointer', whiteSpace:'nowrap',
+          }}>+ Novo</button>
+        </div>
+        <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:10 }}>
+          {['', ...CATEGORIES].map(c => (
+            <button key={c||'all'} onClick={() => setCatFilter(c)} style={{
+              fontSize:10.5, padding:'3px 10px', border:'1px solid var(--b2)',
+              borderRadius:999, cursor:'pointer', fontFamily:'inherit', fontWeight:600,
+              background: catFilter===c ? 'var(--y)' : 'var(--s2)',
+              color:      catFilter===c ? '#000'     : 'var(--tm)',
+            }}>{c||'Todos'}</button>
+          ))}
+        </div>
+
+        {showNewEntity && (
+          <div style={{ background:'var(--s2)', border:'1px solid var(--b2)', borderRadius:'var(--rs)', padding:12, marginBottom:10 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:'var(--tm)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:8 }}>Novo Contato</div>
+            <div style={{ marginBottom:8 }}>
+              <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Categoria</label>
+              <select value={entityForm.category} onChange={e=>setE('category',e.target.value)} style={{ width:'100%' }}>
+                {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom:8 }}>
+              <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Nome *</label>
+              <input value={entityForm.name} onChange={e=>setE('name',e.target.value)} placeholder="Nome do contato ou empresa" style={{ width:'100%' }} />
+            </div>
+            <div style={{ marginBottom:8 }}>
+              <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Telefone</label>
+              <input value={entityForm.phone} onChange={e=>setE('phone',e.target.value)} style={{ width:'100%' }} />
+            </div>
+            <div style={{ marginBottom:8 }}>
+              <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Email</label>
+              <input value={entityForm.email} onChange={e=>setE('email',e.target.value)} style={{ width:'100%' }} />
+            </div>
+            {entityForm.category === 'Fabricantes' && (
+              <div style={{ borderTop:'1px solid var(--b1)', paddingTop:8, marginBottom:8 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'var(--bl)', marginBottom:6 }}>Contato no Fabricante</div>
+                <div style={{ marginBottom:6 }}>
+                  <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Nome do responsável</label>
+                  <input value={entityForm.fabricante_contact_name} onChange={e=>setE('fabricante_contact_name',e.target.value)} style={{ width:'100%' }} />
+                </div>
+                <div style={{ marginBottom:6 }}>
+                  <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Cargo</label>
+                  <input value={entityForm.fabricante_contact_role} onChange={e=>setE('fabricante_contact_role',e.target.value)} style={{ width:'100%' }} />
+                </div>
+                <div style={{ marginBottom:6 }}>
+                  <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Tel. direto</label>
+                  <input value={entityForm.fabricante_contact_phone} onChange={e=>setE('fabricante_contact_phone',e.target.value)} style={{ width:'100%' }} />
+                </div>
+              </div>
+            )}
+            <div style={{ marginBottom:8 }}>
+              <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Notas</label>
+              <textarea value={entityForm.notes} onChange={e=>setE('notes',e.target.value)} rows={2} style={{ width:'100%' }} />
+            </div>
+            <div style={{ display:'flex', gap:6 }}>
+              <button onClick={saveEntity} style={{ padding:'7px 14px', background:'var(--y)', color:'#000', border:'none', borderRadius:'var(--rs)', fontWeight:700, fontSize:11, cursor:'pointer' }}>Salvar</button>
+              <button onClick={() => setShowNewEntity(false)} style={{ padding:'7px 14px', background:'var(--s3)', color:'var(--ts)', border:'1px solid var(--b2)', borderRadius:'var(--rs)', fontSize:11, cursor:'pointer' }}>Cancelar</button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ display:'flex', flexDirection:'column', gap:5, maxHeight:'62vh', overflowY:'auto' }}>
+          {filtered.length === 0 && (
+            <div style={{ textAlign:'center', color:'var(--tm)', fontSize:13, padding:'30px 0' }}>Nenhum contato encontrado</div>
+          )}
+          {filtered.map(e => {
+            const lastAttempt = (e.attempts||[]).sort((a,b) => new Date(b.attempted_at)-new Date(a.attempted_at))[0];
+            const res = lastAttempt ? RESULT_MAP[lastAttempt.result] : null;
+            return (
+              <div key={e.id} onClick={() => selectEntity(e)} style={{
+                padding:'10px 12px', borderRadius:'var(--rs)', cursor:'pointer',
+                background: selected?.id===e.id ? 'rgba(255,215,0,.07)' : 'var(--s1)',
+                border:`1px solid ${selected?.id===e.id ? 'rgba(255,215,0,.3)' : 'var(--b1)'}`,
+              }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:3 }}>
+                  <div style={{ fontSize:13, fontWeight:600 }}>{e.name}</div>
+                  <span style={{ fontSize:9.5, background:'var(--s2)', color:'var(--tm)', padding:'1px 7px', borderRadius:999, fontWeight:600 }}>{e.category}</span>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:11, color:'var(--tm)' }}>
+                  {e.phone && <span>📞 {e.phone}</span>}
+                  <span>{(e.attempts||[]).length} tentativa{(e.attempts||[]).length!==1?'s':''}</span>
+                  {res && <span style={{ color:res.color, fontWeight:600 }}>{res.icon} {res.label}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Right — attempt timeline */}
+      <div>
+        {!selected && (
+          <div style={{ textAlign:'center', color:'var(--tm)', fontSize:13, padding:'80px 0' }}>
+            Selecione um contato para ver o histórico de tentativas
+          </div>
+        )}
+        {selected && (
+          <div>
+            <div style={{ background:'var(--s1)', border:'1px solid var(--b1)', borderRadius:'var(--r)', padding:'16px 20px', marginBottom:12 }}>
+              <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:10 }}>
+                <div>
+                  <div style={{ fontSize:18, fontWeight:800 }}>{selected.name}</div>
+                  <div style={{ fontSize:12, color:'var(--tm)', marginTop:3, display:'flex', gap:12, flexWrap:'wrap' }}>
+                    <span style={{ background:'var(--s2)', padding:'1px 8px', borderRadius:999, fontWeight:600 }}>{selected.category}</span>
+                    {selected.phone && <span>📞 {selected.phone}</span>}
+                    {selected.email && <span>📧 {selected.email}</span>}
+                  </div>
+                  {selected.category === 'Fabricantes' && selected.fabricante_contact_name && (
+                    <div style={{ marginTop:8, padding:'8px 12px', background:'rgba(96,165,250,.06)', border:'1px solid rgba(96,165,250,.15)', borderRadius:'var(--rs)', fontSize:12 }}>
+                      <span style={{ color:'var(--bl)', fontWeight:700 }}>👤 {selected.fabricante_contact_name}</span>
+                      {selected.fabricante_contact_role && <span style={{ color:'var(--tm)', marginLeft:8 }}>{selected.fabricante_contact_role}</span>}
+                      {selected.fabricante_contact_phone && <span style={{ color:'var(--tm)', marginLeft:8 }}>📞 {selected.fabricante_contact_phone}</span>}
+                    </div>
+                  )}
+                  {selected.notes && <div style={{ marginTop:6, fontSize:12, color:'var(--ts)' }}>{selected.notes}</div>}
+                </div>
+                <button onClick={() => setShowNewAttempt(v=>!v)} style={{
+                  padding:'7px 14px', background:'var(--y)', color:'#000', border:'none',
+                  borderRadius:'var(--rs)', fontWeight:700, fontSize:11, cursor:'pointer', flexShrink:0,
+                }}>+ Registrar tentativa</button>
+              </div>
+              <div style={{ display:'flex', gap:10, paddingTop:10, borderTop:'1px solid var(--b1)', flexWrap:'wrap' }}>
+                {Object.entries(RESULT_MAP).map(([key,meta]) => {
+                  const count = attempts.filter(a => a.result===key).length;
+                  if (!count) return null;
+                  return <span key={key} style={{ fontSize:11, color:meta.color, fontWeight:600 }}>{meta.icon} {meta.label}: {count}</span>;
+                })}
+                {attempts.length === 0 && <span style={{ fontSize:11, color:'var(--tm)' }}>Nenhuma tentativa registrada</span>}
+              </div>
+            </div>
+
+            {showNewAttempt && (
+              <div style={{ background:'var(--s2)', border:'1px solid var(--b2)', borderRadius:'var(--rs)', padding:14, marginBottom:12 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'var(--tm)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:10 }}>Nova Tentativa</div>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:8 }}>
+                  <div>
+                    <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Data e hora</label>
+                    <input type="datetime-local" value={attemptForm.attempted_at} onChange={e=>setA('attempted_at',e.target.value)} style={{ width:'100%' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Resultado</label>
+                    <select value={attemptForm.result} onChange={e=>setA('result',e.target.value)} style={{ width:'100%' }}>
+                      {Object.entries(RESULT_MAP).map(([key,meta]) => <option key={key} value={key}>{meta.icon} {meta.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={{ marginBottom:8 }}>
+                  <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Vincular a chamado (opcional)</label>
+                  <select value={attemptForm.chamado_id} onChange={e=>setA('chamado_id',e.target.value)} style={{ width:'100%' }}>
+                    <option value="">Nenhum</option>
+                    {cases.map(c => (
+                      <option key={c.id} value={c.id}>#{c.id} — {c.integrador||c.cliente_final||c.nome} | {c.sn||'-'} | {c.status}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ marginBottom:8 }}>
+                  <label style={{ fontSize:11, color:'var(--tm)', display:'block', marginBottom:3 }}>Observações</label>
+                  <textarea value={attemptForm.notes} onChange={e=>setA('notes',e.target.value)} rows={2} style={{ width:'100%' }} placeholder="O que foi discutido, próximos passos..." />
+                </div>
+                <div style={{ display:'flex', gap:6 }}>
+                  <button onClick={saveAttempt} style={{ padding:'7px 14px', background:'var(--y)', color:'#000', border:'none', borderRadius:'var(--rs)', fontWeight:700, fontSize:11, cursor:'pointer' }}>Salvar</button>
+                  <button onClick={() => setShowNewAttempt(false)} style={{ padding:'7px 14px', background:'var(--s3)', color:'var(--ts)', border:'1px solid var(--b2)', borderRadius:'var(--rs)', fontSize:11, cursor:'pointer' }}>Cancelar</button>
+                </div>
+              </div>
+            )}
+
+            {loading && <div style={{ textAlign:'center', color:'var(--tm)', padding:'20px 0', fontSize:13 }}>Carregando...</div>}
+            {!loading && attempts.length === 0 && (
+              <div style={{ textAlign:'center', color:'var(--tm)', fontSize:13, padding:'30px 0' }}>
+                Nenhuma tentativa registrada ainda.<br/>
+                <span style={{ fontSize:12 }}>Clique em "+ Registrar tentativa" para começar.</span>
+              </div>
+            )}
+            {!loading && attempts.map((a, i) => {
+              const res = RESULT_MAP[a.result] || RESULT_MAP.other;
+              const dt  = new Date(a.attempted_at);
+              return (
+                <div key={a.id} style={{
+                  display:'flex', gap:12, padding:'12px 0',
+                  borderBottom: i < attempts.length-1 ? '1px solid var(--b1)' : 'none',
+                  alignItems:'flex-start',
+                }}>
+                  <div style={{ width:36, height:36, borderRadius:'50%', flexShrink:0, background:`${res.color}18`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, border:`1px solid ${res.color}30` }}>{res.icon}</div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:3 }}>
+                      <span style={{ fontSize:12.5, fontWeight:700, color:res.color }}>{res.label}</span>
+                      <span style={{ fontSize:11, color:'var(--tm)' }}>por {a.author}</span>
+                      {a.chamado && (
+                        <span style={{ fontSize:10.5, background:'rgba(96,165,250,.1)', color:'var(--bl)', padding:'1px 7px', borderRadius:999, fontWeight:600 }}>
+                          🔗 #{a.chamado.id} {a.chamado.sn}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize:11, color:'var(--tm)', marginBottom:4, fontFamily:'monospace' }}>
+                      📅 {dt.toLocaleDateString('pt-BR')} ⏱ {dt.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' })}
+                    </div>
+                    {a.notes && (
+                      <div style={{ fontSize:12, color:'var(--ts)', background:'var(--s2)', padding:'6px 10px', borderRadius:'var(--rs)', lineHeight:1.5 }}>
+                        {a.notes}
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={() => deleteAttempt(a.id)} style={{ background:'none', border:'none', color:'var(--tm)', cursor:'pointer', fontSize:12, padding:'4px 6px', borderRadius:4, flexShrink:0 }}
+                    onMouseEnter={e=>e.currentTarget.style.color='var(--re)'}
+                    onMouseLeave={e=>e.currentTarget.style.color='var(--tm)'}>✕</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Agenda({ showToast, user }) {
   const now = new Date();
-  const isAdminOrMaster = ['admin','master'].includes(user?.role) ||
-    (user?.permissions||[]).includes('view_all_cases') ||
-    (user?.permissions||[]).includes('manage_roles');
+  const [activeTab, setActiveTab] = useState('reminders');
   const [year, setYear]       = useState(now.getFullYear());
   const [month, setMonth]     = useState(now.getMonth());
   const [reminders, setReminders] = useState([]);
@@ -339,10 +658,9 @@ export default function Agenda({ showToast, user }) {
   const [search, setSearch]   = useState('');
 
   const load = useCallback(async () => {
-    const url = isAdminOrMaster ? '/api/reminders?all=true' : '/api/reminders';
-    const data = await api(url).catch(() => []);
+    const data = await api('/api/reminders').catch(() => []);
     setReminders(data);
-  }, [isAdminOrMaster]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -407,15 +725,33 @@ export default function Agenda({ showToast, user }) {
   return (
     <div style={{ padding:'28px 32px' }}>
       {/* Header */}
-      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:20 }}>
+      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:16 }}>
         <div>
           <h1 style={{ fontSize:26, fontWeight:800, letterSpacing:'-.025em', marginBottom:4 }}>📅 Agenda</h1>
-          <p style={{ fontSize:13, color:'var(--tm)' }}>Lembretes de retorno e anotações de clientes.</p>
+          <p style={{ fontSize:13, color:'var(--tm)' }}>Lembretes de retorno e tentativas de contato.</p>
         </div>
-        <Btn variant="primary" onClick={() => { setShowForm(true); setEditing(null); }}>
-          + Novo Lembrete
-        </Btn>
+        {activeTab === 'reminders' && (
+          <Btn variant="primary" onClick={() => { setShowForm(true); setEditing(null); }}>
+            + Novo Lembrete
+          </Btn>
+        )}
       </div>
+
+      {/* Tab switcher */}
+      <div style={{ display:'inline-flex', gap:2, background:'var(--s1)', border:'1px solid var(--b1)', borderRadius:'var(--rs)', padding:3, marginBottom:20 }}>
+        {[{id:'reminders',label:'📅 Lembretes'},{id:'contacts',label:'📞 Tentativas de Contato'}].map(t => (
+          <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+            padding:'8px 18px', border:'none', borderRadius:7, fontSize:12.5, fontWeight:600,
+            cursor:'pointer', fontFamily:'inherit', transition:'all .15s',
+            background: activeTab===t.id ? 'var(--s3)' : 'transparent',
+            color:      activeTab===t.id ? 'var(--tx)' : 'var(--tm)',
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {activeTab === 'contacts' && <ContactsTab showToast={showToast} />}
+
+      {activeTab === 'reminders' && <>
 
       {/* Stat strip */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:18 }}>
@@ -513,6 +849,8 @@ export default function Agenda({ showToast, user }) {
           ))}
         </div>
       </div>
+    </>
+    }
     </div>
   );
 }

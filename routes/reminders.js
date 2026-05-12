@@ -98,7 +98,7 @@ router.get('/', async (req, res) => {
         // Last resort: use first letter of user_id as placeholder
         rows = rows.map(r => ({
           ...r,
-          _userName: nameMap[r.user_id] || ('user_' + (r.user_id||'?').slice(0, 6)),
+          _userName: nameMap[r.user_id] || null,
         }));
       } catch (nameErr) {
         console.warn('[Reminders] name enrichment failed:', nameErr.message);

@@ -15,8 +15,9 @@ const { google } = require('googleapis');
 const { supabaseAdmin } = require('../services/db');
 
 // ── Multer ────────────────────────────────────────────────────────────────────
-const TMP = path.join(process.cwd(), '_tmp_uploads');
-fs.mkdirSync(TMP, { recursive: true });
+const IS_CLOUD = process.env.CLOUD_MODE === 'true';
+const TMP = IS_CLOUD ? '/tmp' : path.join(process.cwd(), '_tmp_uploads');
+if (!IS_CLOUD) { try { fs.mkdirSync(TMP, { recursive: true }); } catch (_) {} }
 
 const upload = multer({
   dest: TMP,
