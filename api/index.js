@@ -1,53 +1,61 @@
 // api/index.js — Vercel serverless entry point
-// Wraps the Express app as a single serverless function.
-// Local-only features (watcher, OCR, Ollama) are automatically
-// disabled via CLOUD_MODE=true set in vercel.json
-
 require('dotenv').config();
 process.env.CLOUD_MODE = 'true';
 
 const express      = require('express');
 const cors         = require('cors');
 const cookieParser = require('cookie-parser');
-const path         = require('path');
-const authRoutes   = require('../routes/auth');
-const driveRoutes  = require('../routes/drive');
 
 const app = express();
 
-// Safe require — prevents one bad route from crashing the whole function
-function safeRoute(routePath) {
-  try {
-    return require(routePath);
-  } catch (err) {
-    console.error('[Vercel] Failed to load route:', routePath, err.message);
-    const r = express.Router();
-    r.all('*', (req, res) => res.status(503).json({
-      error: 'Rota temporariamente indisponivel',
-      route: routePath.split('/').pop(),
-      detail: err.message,
-    }));
-    return r;
-  }
-}
-
+// ── Middleware ─────────────────────────────────────────────────────────────────
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 
-// Auth middleware on every request
-app.use(authRoutes.authMiddleware);
+// safeRoute — loads a route module; returns a 503 handler if it fails to load
+// This prevents ONE broken route from crashing ALL routes
+function safeRoute(p) {
+  try {
+    return require(p);
+  } catch (err) {
+    console.error('[index.js] Route load failed:', p, '|', err.message);
+    const r = express.Router();
+    r.all('*', (req, res) =>
+      res.status(503).json({ error: 'Servico temporariamente indisponivel', detail: err.message })
+    );
+    return r;
+  }
+}
 
-// Debug logger
+// Auth and Drive loaded separately (they export named properties)
+const authRoutes  = safeRoute('../routes/auth');
+const driveRoutes = safeRoute('../routes/drive');
+
+// Auth middleware — must run before all routes
 app.use((req, res, next) => {
-  console.log(`[${req.method}] ${req.path} | ${req.user?.email || 'anon'}`);
+  try {
+    if (typeof authRoutes.authMiddleware === 'function') {
+      return authRoutes.authMiddleware(req, res, next);
+    }
+    next();
+  } catch (err) {
+    console.error('[Auth middleware crash]', err.message);
+    next();
+  }
+});
+
+// Request logger
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api'))
+    console.log(`[${req.method}] ${req.path} | ${req.user?.email || 'anon'}`);
   next();
 });
 
-// ── Routes available in cloud mode ───────────────────────────────────────────
-app.use('/api/auth',     authRoutes.router);
-app.use('/api/drive',    driveRoutes);
+// ── Routes ────────────────────────────────────────────────────────────────────
+app.use('/api/auth',          authRoutes.router || authRoutes);
+app.use('/api/drive',         driveRoutes.router || driveRoutes);
 app.use('/api/cases',         safeRoute('../routes/cases'));
 app.use('/api/products',      safeRoute('../routes/products'));
 app.use('/api/settings',      safeRoute('../routes/settings'));
@@ -63,22 +71,15 @@ app.use('/api/equipment',     safeRoute('../routes/equipment'));
 app.use('/api/analysis',      safeRoute('../routes/analysis'));
 app.use('/api/knowledge',     safeRoute('../routes/knowledge'));
 app.use('/api/ai-obs',        safeRoute('../routes/ai-obs'));
+app.use('/api/contacts',      safeRoute('../routes/contacts'));
 
-// ── Routes DISABLED in cloud mode ────────────────────────────────────────────
-// /api/files  — local folder scanning (no filesystem on Vercel)
-// watcher     — no persistent process on serverless
-// OCR server  — Tesseract runs locally only
-// Ollama      — local AI model only
-app.use('/api/files', (req, res) => {
-  res.status(503).json({
-    error:       'Não disponível no modo cloud',
-    cloud_mode:  true,
-    message:     'O processamento OCR e leitura de arquivos locais requer a versão desktop do Belenergy.',
-  });
-});
+// Files disabled in cloud
+app.use('/api/files', (req, res) =>
+  res.status(503).json({ error: 'Nao disponivel no modo cloud', cloud_mode: true })
+);
 
-// 404 handler
-app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada' }));
+// 404
+app.use((req, res) => res.status(404).json({ error: 'Rota nao encontrada' }));
 
 // Error handler
 app.use((err, req, res, next) => {
