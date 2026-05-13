@@ -1060,12 +1060,13 @@ function ApprovalManager({ user, showToast }) {
     : [{ id:3, label:'Técnico' }];
 
   const load = useCallback(async () => {
-    const [appr, reqs] = await Promise.all([
+    const [appr, phoneU, reqs] = await Promise.all([
       api('/api/auth/approvals').catch(() => []),
       api('/api/phone-auth/admin/users').catch(() => []),
       api('/api/auth/access-requests').catch(() => []),
     ]);
     setApprovals(Array.isArray(appr) ? appr : []);
+    setPhoneUsers(Array.isArray(phoneU) ? phoneU : []);
     setRequests(Array.isArray(reqs) ? reqs : []);
   }, []);
 
@@ -1331,6 +1332,214 @@ function ApprovalManager({ user, showToast }) {
 }
 
 // ── Configuracoes ─────────────────────────────────────────────────────────────
+
+// ── JanitorPanel — Auto archive old data to GitHub ──────────────────────────
+function JanitorPanel({ showToast }) {
+  const [settings, setSettings]   = useState(null);
+  const [preview,  setPreview]    = useState(null);
+  const [log,      setLog]        = useState([]);
+  const [days,     setDays]       = useState(90);
+  const [enabled,  setEnabled]    = useState(false);
+  const [repo,     setRepo]       = useState('');
+  const [token,    setToken]      = useState('');
+  const [branch,   setBranch]     = useState('main');
+  const [running,  setRunning]    = useState(false);
+  const [section,  setSection]    = useState('settings'); // settings | preview | log
+
+  const ALL_TABLES = ['chamados', 'reminders', 'contact_attempts', 'ai_requests', 'pending_curation'];
+  const [tables, setTables] = useState(ALL_TABLES);
+
+  useEffect(() => {
+    api('/api/janitor/settings').then(s => {
+      setSettings(s);
+      setDays(s.days || 90);
+      setEnabled(s.enabled || false);
+      setRepo(s.githubRepo || '');
+      setBranch(s.githubBranch || 'main');
+      setTables(s.tables || ALL_TABLES);
+    }).catch(() => {});
+  }, []);
+
+  async function saveSettings() {
+    await api('/api/janitor/settings', {
+      method:'PUT',
+      body: JSON.stringify({ days, enabled, tables, githubRepo: repo, githubBranch: branch, ...(token ? { githubToken: token } : {}) }),
+    }).catch(e => showToast('Erro: ' + e.message, 'warn'));
+    showToast('✅ Configurações do Janitor salvas');
+  }
+
+  async function loadPreview() {
+    setSection('preview');
+    const p = await api('/api/janitor/preview?days=' + days).catch(() => null);
+    setPreview(p);
+  }
+
+  async function loadLog() {
+    setSection('log');
+    const l = await api('/api/janitor/log').catch(() => []);
+    setLog(l || []);
+  }
+
+  async function runDryRun() {
+    setRunning(true);
+    const r = await api('/api/janitor/run', { method:'POST', body: JSON.stringify({ dryRun: true, days, tables }) }).catch(e => ({ error: e.message }));
+    setRunning(false);
+    if (r?.error) { showToast('Erro: ' + r.error, 'warn'); return; }
+    showToast('✅ Simulação concluída — ' + r.totalArchived + ' registros seriam arquivados');
+    loadPreview();
+  }
+
+  async function runReal() {
+    if (!confirm('Isso irá mover dados para o GitHub e deletar do Supabase. Confirma?')) return;
+    setRunning(true);
+    const r = await api('/api/janitor/run', { method:'POST', body: JSON.stringify({ dryRun: false, days, tables }) }).catch(e => ({ error: e.message }));
+    setRunning(false);
+    if (r?.error) { showToast('Erro: ' + r.error, 'warn'); return; }
+    showToast('✅ Janitor concluído — ' + r.totalArchived + ' arquivados, ' + r.totalDeleted + ' deletados do Supabase');
+    loadLog();
+  }
+
+  const TABLE_LABELS = { chamados:'Chamados', reminders:'Lembretes', contact_attempts:'Tentativas de Contato', ai_requests:'Logs de IA', pending_curation:'Curadoria Pendente' };
+
+  return (
+    <div style={{ background:'var(--s1)', border:'1px solid var(--b2)', borderRadius:'var(--r)', padding:'20px 24px', marginBottom:16 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
+        <div style={{ width:38, height:38, borderRadius:11, background:'rgba(167,139,250,.15)', border:'1px solid rgba(167,139,250,.3)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>🧹</div>
+        <div>
+          <div style={{ fontWeight:700, color:'var(--tx)', fontSize:14 }}>Auto Janitor — Arquivamento de Dados</div>
+          <div style={{ fontSize:11, color:'var(--tm)' }}>Move dados antigos do Supabase para o repositório GitHub · Acesso Master</div>
+        </div>
+        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:6 }}>
+          <span style={{ fontSize:11, color: enabled ? 'var(--gr)' : 'var(--tm)' }}>{enabled ? '● Ativo' : '○ Inativo'}</span>
+        </div>
+      </div>
+
+      {/* Tab switcher */}
+      <div style={{ display:'flex', gap:2, marginBottom:16, background:'var(--s2)', borderRadius:8, padding:3, width:'fit-content' }}>
+        {[['settings','⚙️ Config'], ['preview','👁️ Preview'], ['log','📋 Log']].map(([id, label]) => (
+          <button key={id} onClick={() => { setSection(id); if (id==='preview') loadPreview(); if (id==='log') loadLog(); }}
+            style={{ padding:'6px 14px', border:'none', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+              background: section===id ? 'var(--s3)' : 'transparent', color: section===id ? 'var(--tx)' : 'var(--tm)', fontFamily:'inherit' }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Settings */}
+      {section === 'settings' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div>
+              <label style={{ fontSize:11, color:'var(--tm)', fontWeight:700, display:'block', marginBottom:4 }}>Arquivar dados com mais de (dias)</label>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <input type="number" min="7" max="3650" value={days} onChange={e => setDays(parseInt(e.target.value)||90)}
+                  style={{ width:100, background:'var(--s2)', border:'1px solid var(--b2)', color:'var(--tx)', borderRadius:'var(--rs)', padding:'8px 10px', fontSize:14, fontFamily:'inherit', outline:'none' }} />
+                <span style={{ fontSize:12, color:'var(--tm)' }}>dias sem atualização</span>
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize:11, color:'var(--tm)', fontWeight:700, display:'block', marginBottom:4 }}>Execução automática</label>
+              <button onClick={() => setEnabled(v => !v)} style={{ padding:'8px 16px', background: enabled ? 'rgba(34,197,94,.15)' : 'var(--s2)',
+                border:`1px solid ${enabled ? 'rgba(34,197,94,.3)' : 'var(--b2)'}`, borderRadius:'var(--rs)',
+                color: enabled ? 'var(--gr)' : 'var(--tm)', fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                {enabled ? '✅ Ativado' : '⚪ Desativado'}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize:11, color:'var(--tm)', fontWeight:700, display:'block', marginBottom:6 }}>Tabelas a arquivar</label>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+              {ALL_TABLES.map(t => (
+                <button key={t} onClick={() => setTables(prev => prev.includes(t) ? prev.filter(x=>x!==t) : [...prev, t])}
+                  style={{ padding:'4px 12px', border:`1px solid ${tables.includes(t) ? 'var(--pu)' : 'var(--b2)'}`,
+                    background: tables.includes(t) ? 'rgba(167,139,250,.12)' : 'var(--s2)',
+                    color: tables.includes(t) ? 'var(--pu)' : 'var(--tm)',
+                    borderRadius:999, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                  {TABLE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ borderTop:'1px solid var(--b1)', paddingTop:14 }}>
+            <label style={{ fontSize:11, color:'var(--tm)', fontWeight:700, display:'block', marginBottom:8 }}>🐙 GitHub Repositório de Arquivo</label>
+            <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:8, marginBottom:8 }}>
+              <div>
+                <label style={{ fontSize:10, color:'var(--tm)', display:'block', marginBottom:3 }}>Repositório (owner/nome)</label>
+                <input value={repo} onChange={e=>setRepo(e.target.value)} placeholder="seu-usuario/belenergy-archive"
+                  style={{ width:'100%', background:'var(--s2)', border:'1px solid var(--b2)', color:'var(--tx)', borderRadius:'var(--rs)', padding:'8px 10px', fontSize:12, fontFamily:'inherit', outline:'none' }} />
+              </div>
+              <div>
+                <label style={{ fontSize:10, color:'var(--tm)', display:'block', marginBottom:3 }}>Branch</label>
+                <input value={branch} onChange={e=>setBranch(e.target.value)} placeholder="main"
+                  style={{ width:'100%', background:'var(--s2)', border:'1px solid var(--b2)', color:'var(--tx)', borderRadius:'var(--rs)', padding:'8px 10px', fontSize:12, fontFamily:'inherit', outline:'none' }} />
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize:10, color:'var(--tm)', display:'block', marginBottom:3 }}>Token GitHub (ghp_xxxx) — {settings?.githubTokenSet ? '✅ já configurado' : '⚠️ não configurado'}</label>
+              <input type="password" value={token} onChange={e=>setToken(e.target.value)} placeholder={settings?.githubTokenSet ? '(manter atual — deixe vazio)' : 'ghp_xxxxxxxxxxxxx'}
+                style={{ width:'100%', background:'var(--s2)', border:'1px solid var(--b2)', color:'var(--tx)', borderRadius:'var(--rs)', padding:'8px 10px', fontSize:12, fontFamily:'inherit', outline:'none' }} />
+              <div style={{ fontSize:10, color:'var(--tm)', marginTop:4 }}>Permissões necessárias: repo (write). Criar em github.com → Settings → Developer Settings → Personal Access Tokens</div>
+            </div>
+          </div>
+
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={saveSettings} style={{ padding:'9px 18px', background:'var(--y)', color:'#000', border:'none', borderRadius:'var(--rs)', fontWeight:700, fontSize:12, cursor:'pointer', fontFamily:'inherit' }}>
+              💾 Salvar
+            </button>
+            <button onClick={runDryRun} disabled={running} style={{ padding:'9px 18px', background:'var(--s2)', border:'1px solid var(--b2)', color:'var(--ts)', borderRadius:'var(--rs)', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+              {running ? '⟳ Executando...' : '🔍 Simular (dry run)'}
+            </button>
+            <button onClick={runReal} disabled={running || !repo} style={{ padding:'9px 18px', background:'rgba(239,68,68,.15)', border:'1px solid rgba(239,68,68,.3)', color:'var(--re)', borderRadius:'var(--rs)', fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit', marginLeft:'auto', opacity: (!repo || running) ? .5 : 1 }}>
+              🧹 Executar Janitor
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Preview */}
+      {section === 'preview' && (
+        <div>
+          {!preview ? <div style={{ color:'var(--tm)', fontSize:13 }}>Carregando preview...</div> : (
+            <div>
+              <div style={{ fontSize:12, color:'var(--tm)', marginBottom:12 }}>
+                Registros com mais de <b style={{ color:'var(--y)' }}>{preview.days} dias</b> sem atualização (cutoff: {new Date(preview.cutoffDate).toLocaleDateString('pt-BR')}):
+              </div>
+              {Object.entries(preview.preview).map(([table, info]) => (
+                <div key={table} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 12px', background:'var(--s2)', borderRadius:'var(--rs)', marginBottom:6 }}>
+                  <span style={{ fontSize:13, color:'var(--ts)' }}>{info.label}</span>
+                  <span style={{ fontWeight:700, color: info.count > 0 ? 'var(--or)' : 'var(--gr)', fontSize:14 }}>
+                    {info.error ? '❌ ' + info.error : info.count + ' registros'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Log */}
+      {section === 'log' && (
+        <div style={{ maxHeight:300, overflowY:'auto' }}>
+          {log.length === 0 ? <div style={{ color:'var(--tm)', fontSize:13 }}>Nenhuma execução registrada ainda.</div> : log.map(l => (
+            <div key={l.id} style={{ padding:'8px 12px', background:'var(--s2)', borderRadius:'var(--rs)', marginBottom:6, fontSize:12 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
+                <span style={{ color:'var(--ts)', fontWeight:600 }}>{l.table_name}</span>
+                <span style={{ color:'var(--tm)' }}>{new Date(l.run_at).toLocaleString('pt-BR')}</span>
+              </div>
+              <div style={{ color: l.status==='ok' ? 'var(--gr)' : 'var(--re)' }}>
+                {l.dry_run ? '🔍 Simulação — ' : ''}
+                {l.status==='ok' ? l.records_archived + ' arquivados, ' + l.records_deleted + ' deletados' : '❌ ' + l.error_msg}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Configuracoes({ showToast, user }) {
   const [cfg, setCfg]     = useState({});
   const [saved, setSaved] = useState('');
@@ -1377,8 +1586,11 @@ export function Configuracoes({ showToast, user }) {
           <Field label="ID da pasta mestre no Drive" hint="Abra a pasta no Drive. O ID está na URL após /folders/">
             <input value={cfg.driveId||''} onChange={e=>set('driveId',e.target.value)} placeholder="1abc...xyz" />
           </Field>
-          <Field label="ID da pasta do Centro de Soluções" hint="Pasta dedicada para imagens e vídeos do Centro de Soluções. Deixe vazio para usar a pasta mestre.">
+          <Field label="ID da pasta do Centro de Soluções" hint="Pasta para imagens e vídeos do Centro de Soluções. Deixe vazio para usar a pasta mestre.">
             <input value={cfg.solutionsDriveId||''} onChange={e=>set('solutionsDriveId',e.target.value)} placeholder="1abc...xyz (opcional)" />
+          </Field>
+          <Field label="ID da pasta de Manuais e Datasheets" hint="Pasta com PDFs indexados pelo AI Obs para busca semântica em manuais.">
+            <input value={cfg.manualsDriveId||''} onChange={e=>set('manualsDriveId',e.target.value)} placeholder="1abc...xyz (opcional)" />
           </Field>
           <div style={{ fontSize:12, color: cfg.has_drive_auth ? 'var(--gr)' : 'var(--tm)', marginBottom:8 }}>
             {cfg.has_drive_auth ? '✅ Drive autenticado' : '⚠️ Drive não autenticado'}
@@ -1436,6 +1648,9 @@ export function Configuracoes({ showToast, user }) {
 
       {/* User Approval Management — master and admin */}
       <ApprovalManager user={user} showToast={showToast} />
+
+      {/* Janitor — master only */}
+      {user?.role === 'master' && <JanitorPanel showToast={showToast} />}
 
       <div style={{ display:'flex', alignItems:'center', gap:14 }}>
         <Btn variant="primary" style={{ padding:'13px 40px' }} onClick={save}>Salvar Configurações</Btn>

@@ -78,13 +78,14 @@ async function authMiddleware(req, res, next) {
     if (!req.path.startsWith('/api')) return next();
     
     // 🚨 CORREÇÃO: Todos os "includes" precisam ficar DENTRO dos parênteses do if
-    if (
-        req.path.includes('/auth/login') || 
-        req.path.includes('/auth/callback') || 
-        req.path.includes('/drive/callback')
-    ) {
-        return next();
-    }
+    // Public routes — no token required
+    const PUBLIC_PATHS = [
+      '/auth/login', '/auth/callback', '/drive/callback',
+      '/phone-auth/login', '/phone-auth/register',
+      '/phone-auth/verify-email', '/phone-auth/resend-otp',
+      '/phone-auth/send-otp', '/phone-auth/verify-otp',
+    ];
+    if (PUBLIC_PATHS.some(p => req.path.includes(p))) return next();
 
     const authHeader = req.headers.authorization || '';
     // Also accept token from query param — needed for EventSource (SSE) which

@@ -13,12 +13,24 @@ router.get('/', async (req, res) => {
   try {
     const userId = req.user?.id;
     const { status } = req.query;
+
+    // Check role — admins/masters see all cases, techs only their own
+    const { data: su } = await supabaseAdmin
+      .from('settings_user').select('role_id').eq('user_id', userId).maybeSingle();
+    const isAdminOrMaster = su?.role_id === 1 || su?.role_id === 2;
+
     let query = supabaseAdmin.from('chamados').select('*')
       .order('id', { ascending: false });
+
+    if (!isAdminOrMaster) {
+      // Technicians: only their own cases
+      query = query.eq('user_id', userId);
+    }
     if (status) query = query.eq('status', status);
+
     const { data, error } = await query;
     if (error) throw error;
-    res.json(data);
+    res.json(data || []);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

@@ -2,7 +2,7 @@
 const express = require('express');
 const router  = express.Router();
 const { supabaseAdmin } = require('../services/db');
-const { hasPermission, enrichUser } = require('../services/permissions');
+const { hasPermission, enrichUser } = require('../services/permissions'); // v2 shims
 router.use(enrichUser);
 
 function isAdmin(req) {

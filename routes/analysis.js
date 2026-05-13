@@ -399,4 +399,46 @@ router.post('/promote/:id', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+
+// ── POST /api/analysis/feedback — thumbs up/down on AI response ──────────────
+router.post('/feedback', async (req, res) => {
+  try {
+    const { query, answer, helpful, sources, similarity, note } = req.body;
+    const crypto = require('crypto');
+    const answerHash = answer
+      ? crypto.createHash('sha256').update(answer.slice(0, 500)).digest('hex')
+      : null;
+
+    await supabaseAdmin.from('ai_feedback').insert([{
+      query:       query   || '',
+      answer_hash: answerHash,
+      helpful:     Boolean(helpful),
+      sources:     sources ? JSON.stringify(sources) : null,
+      similarity:  similarity || null,
+      user_id:     req.user?.id || null,
+      note:        note || null,
+    }]);
+
+    // Thumbs down → also log to pending_curation for review
+    if (!helpful) {
+      await supabaseAdmin.from('pending_curation').insert([{
+        query,
+        brand:  sources?.[0]?.brand || null,
+        source: 'feedback',
+        user_id: req.user?.id,
+      }]).catch(() => {});
+    }
+
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /api/analysis/feedback/stats — approval stats per solution ────────────
+router.get('/feedback/stats', async (req, res) => {
+  try {
+    const { data } = await supabaseAdmin.from('solution_boosts').select('*');
+    return res.json(data || []);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;

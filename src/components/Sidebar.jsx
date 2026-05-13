@@ -1,17 +1,18 @@
 import React from 'react';
 
 const NAV = [
-  { id:'registro',      icon:'📋', label:'Registro' },
-  { id:'dashboard',     icon:'📊', label:'Dashboard' },
-  { id:'agenda',        icon:'📅', label:'Agenda' },
-  { id:'clientes',      icon:'👥', label:'Clientes' },
-  { id:'solutions',     icon:'🔬', label:'Soluções' },
-  { id:'diagnostico',   icon:'🧠', label:'Diagnóstico' },
-  { id:'produtos',      icon:'📦', label:'Produtos' },
-  { id:'historico',     icon:'🕘', label:'Histórico' },
-  { id:'jira',          icon:'🔗', label:'Jira' },
-  { id:'configuracoes', icon:'⚙️', label:'Configurações' },
-  { id:'ai_obs',        icon:'🤖', label:'AI Obs',       roles:['master','admin'] },
+  { id:'registro',      icon:'📋', label:'Registro',     roles: null },
+  { id:'dashboard',     icon:'📊', label:'Dashboard',    roles: null },
+  { id:'clientes',      icon:'👥', label:'Clientes',     roles: null },
+  { id:'solutions',     icon:'🔬', label:'Soluções',     roles: null },
+  { id:'ai_search',     icon:'🧠', label:'Busca IA',     roles: null }, // all users
+  { id:'agenda',        icon:'📅', label:'Agenda',       roles: null },
+  { id:'diagnostico',   icon:'🔬', label:'Diagnóstico',  roles: null },
+  { id:'produtos',      icon:'📦', label:'Produtos',     roles: null },
+  { id:'historico',     icon:'🕘', label:'Histórico',    roles: null },
+  { id:'jira',          icon:'🔗', label:'Jira',         roles: null },
+  { id:'ai_obs',        icon:'📡', label:'AI Obs',       roles: ['master','admin'] },
+  { id:'configuracoes', icon:'⚙️', label:'Configurações',roles: null },
 ];
 
 export default function Sidebar({ view, setView, user, onLogout, lastUpdate, onExportCSV, folders, selectedFolder, onFolderChange, notificationBell, watcherStatus }) {

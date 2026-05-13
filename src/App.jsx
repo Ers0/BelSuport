@@ -13,6 +13,7 @@ import Agenda from './views/Agenda';
 import Diagnostico from './views/Diagnostico';
 import { Produtos, Historico, Jira, Configuracoes } from './views/OtherViews';
 import AIObservability from './views/AIObservability';
+import AISearch from './views/AISearch';
 import PhoneLogin from './components/PhoneLogin';
 
 export default function App() {
@@ -87,7 +88,23 @@ export default function App() {
     if (!user) return;
     const token = localStorage.getItem('session_token');
     if (isCloud) return; // files/events SSE not available in cloud mode
-    const es = new EventSource(`/api/files/events?token=${token}`);
+
+    // Exponential backoff to prevent flood when server restarts
+    let retryCount = 0;
+    let esRef = null;
+
+    function connectSSE() {
+      esRef = new EventSource(`/api/files/events?token=${token}`);
+      esRef.onopen = () => { retryCount = 0; }; // reset on success
+      esRef.onerror = () => {
+        esRef.close();
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000); // max 30s
+        retryCount++;
+        setTimeout(connectSSE, delay);
+      };
+      return esRef;
+    }
+    const es = connectSSE();
     es.onmessage = (e) => {
       if (e.data === 'folders-updated') { loadFolders(); return; }
       try {
@@ -418,6 +435,7 @@ export default function App() {
     jira:         <Jira showToast={showToast} />,
     configuracoes:<Configuracoes showToast={showToast} user={user} />,
     ai_obs:       <AIObservability showToast={showToast} />,
+    ai_search:    <AISearch showToast={showToast} user={user} />,
   };
 
   return (

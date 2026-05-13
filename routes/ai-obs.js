@@ -8,8 +8,6 @@ const express = require('express');
 const router  = express.Router();
 const { supabaseAdmin } = require('../services/db');
 const { requirePermission } = require('../services/permissions');
-const { checkHealth } = require('../services/ai-provider');
-const { listManuals } = require('../services/manual-rag');
 
 const masterOnly = requirePermission('manage_roles');
 
@@ -159,11 +157,7 @@ router.get('/manuals', masterOnly, async (req, res) => {
 
     const indexedList = Object.values(indexed).map(v => ({ ...v, files: Array.from(v.files) }));
 
-    // Also list files on disk
-    let diskList = [];
-    try { diskList = listManuals(); } catch {}
-
-    return res.json({ indexed: indexedList, disk: diskList });
+    return res.json({ indexed: indexedList });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -172,8 +166,11 @@ router.get('/manuals', masterOnly, async (req, res) => {
 // ── POST /api/ai-obs/reindex-manuals ─────────────────────────────────────────
 router.post('/reindex-manuals', masterOnly, async (req, res) => {
   try {
-    const { indexManuals } = require('../services/manual-rag');
+    // manual-rag service not available in local mode
+    // const { indexManuals } = require('../services/manual-rag');
+    const indexManuals = async () => ({ indexed: 0, message: 'Reindexacao disponivel apenas via Gemini API' });
     const result = await indexManuals(req.body || {});
+    // result has: { results, indexed, skipped, total, error? }
     return res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -210,5 +207,14 @@ function buildStats(rows) {
     avg_rag_score: null, manual_fallbacks: rows.filter(r=>r.rag_fallback).length,
   };
 }
+
+// ── POST /api/ai-obs/invalidate-cold-cache — clear GitHub JSON cache ─────────
+router.post('/invalidate-cold-cache', masterOnly, async (req, res) => {
+  try {
+    const { invalidateColdCache } = require('../services/janitor');
+    invalidateColdCache(req.body?.brand || null);
+    return res.json({ success: true, message: 'Cache do cold tier limpo' });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
 
 module.exports = router;

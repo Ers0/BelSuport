@@ -645,7 +645,7 @@ function ContactsTab({ showToast }) {
   );
 }
 
-export default function Agenda({ showToast, user }) {
+export default function Agenda({ showToast = () => {}, user = {} }) {
   const now = new Date();
   const [activeTab, setActiveTab] = useState('reminders');
   const [year, setYear]       = useState(now.getFullYear());
@@ -657,9 +657,13 @@ export default function Agenda({ showToast, user }) {
   const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch]   = useState('');
 
+  const isAdminOrMaster = user?.role === 'master' || user?.role === 'admin'
+    || (user?.permissions || []).includes('view_all_cases')
+    || (user?.permissions || []).includes('manage_roles');
+
   const load = useCallback(async () => {
     const data = await api('/api/reminders').catch(() => []);
-    setReminders(data);
+    setReminders(Array.isArray(data) ? data : []);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -845,6 +849,10 @@ export default function Agenda({ showToast, user }) {
               onEdit={r => { setEditing(r); setShowForm(false); }}
               onDelete={del}
               onStatusChange={changeStatus}
+              showAuthor={isAdminOrMaster}
+              currentUser={user}
+              onCommentAdded={load}
+              showToast={showToast}
             />
           ))}
         </div>

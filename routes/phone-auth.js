@@ -171,69 +171,216 @@ function validatePassword(password) {
 // PUBLIC ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── POST /api/phone-auth/register — no OTP, admin approval is verification ───
+// ── POST /api/phone-auth/register — step 1: validate + send OTP to email ──────
+// OTP verifies the email is real before creating the account.
+// Registration data is re-submitted with the OTP on /verify-email.
 router.post('/register', async (req, res) => {
   try {
     const { phone: rawPhone, name, email, password } = req.body;
-    if (!rawPhone || !name || !email || !password) {
-      return res.status(400).json({ error: 'Nome, email, telefone e senha são obrigatórios' });
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Nome, email e senha são obrigatórios' });
+    }
+    if (!email.includes('@')) {
+      return res.status(400).json({ error: 'Email inválido' });
     }
 
-    const phone = normalizePhone(rawPhone);
     const pwErr = validatePassword(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    // Check if already registered
+    // Check if already registered and approved
     const { data: existing } = await supabaseAdmin
-      .from('phone_users').select('id, approved').eq('phone', phone).maybeSingle();
+      .from('phone_users').select('id, approved, phone_verified').ilike('email', email).maybeSingle();
 
     if (existing?.approved) {
-      return res.status(409).json({ error: 'Este número já possui acesso. Use o login.' });
+      return res.status(409).json({ error: 'Este email já possui acesso. Use o login.' });
     }
-    if (existing) {
-      return res.status(409).json({ error: 'Cadastro já registrado e aguardando aprovação.', pending: true });
+    if (existing?.phone_verified) {
+      return res.status(409).json({
+        error: 'Cadastro já registrado e aguardando aprovação.',
+        pending: true,
+      });
     }
 
-    // Create user as pending — no OTP needed (admin approval is the verification)
-    const salt   = generateSalt();
-    const pwHash = hashPassword(password, salt);
+    // Rate limit: 1 OTP per minute per email
+    const { data: recent } = await supabaseAdmin
+      .from('phone_auth_requests')
+      .select('created_at')
+      .eq('phone', 'email:' + email.toLowerCase())
+      .eq('used', false)
+      .gte('created_at', new Date(Date.now() - 60_000).toISOString())
+      .limit(1);
 
-    await supabaseAdmin.from('phone_users').insert([{
-      id:             phone,
-      phone,
-      email,
-      name,
-      password_hash:  pwHash,
-      password_salt:  salt,
-      phone_verified: true,   // email collected at registration is sufficient proof
-      approved:       false,
-      updated_at:     new Date(),
+    if (recent?.length) {
+      return res.status(429).json({ error: 'Aguarde 1 minuto antes de solicitar novo código.' });
+    }
+
+    // Generate 6-digit OTP
+    const otp      = generateOTP();
+    const expires  = new Date(Date.now() + 5 * 60_000);
+
+    // Store OTP (phone field stores 'email:xxx' for email-based OTPs)
+    await supabaseAdmin.from('phone_auth_requests').insert([{
+      phone:      'email:' + email.toLowerCase(),
+      email:      email,
+      name:       name,
+      otp_hash:   hashOTP(otp),
+      expires_at: expires.toISOString(),
     }]);
 
-    // Send confirmation email to user
+    // Send OTP via existing email sender
     try {
       const { sendEmail } = require('./sheets');
       const first = name.split(' ')[0];
       await sendEmail({
         to:      email,
+        subject: `${otp} — Código de verificação Belenergy`,
+        html: `
+          <div style="font-family:sans-serif;max-width:440px;margin:0 auto;padding:32px 24px;background:#0C0E16;border-radius:16px;color:#EEF0F8">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="display:inline-block;background:linear-gradient(135deg,#FFD700,#FF8C00);width:56px;height:56px;border-radius:16px;line-height:56px;font-size:28px">⚡</div>
+              <h2 style="color:#FFD700;margin:12px 0 4px">Belenergy Support Pro</h2>
+            </div>
+            <p style="color:#C4C9DC">Olá, <b>${first}</b>!</p>
+            <p style="color:#C4C9DC;line-height:1.6">Use o código abaixo para verificar seu email e continuar o cadastro:</p>
+            <div style="text-align:center;margin:28px 0;padding:20px;background:#1C1F2E;border-radius:12px;border:1px solid #2A2F45">
+              <span style="font-size:44px;font-weight:900;letter-spacing:14px;color:#FFD700;font-family:monospace">${otp}</span>
+            </div>
+            <p style="color:#6B7694;font-size:13px;text-align:center">⏱ Válido por <b>5 minutos</b>. Não compartilhe este código.</p>
+            <hr style="border:none;border-top:1px solid #1C1F2E;margin:20px 0"/>
+            <p style="color:#6B7694;font-size:11px;text-align:center">Se você não solicitou este código, ignore este email.</p>
+          </div>`,
+      });
+      console.log('[PhoneAuth] OTP sent to', email);
+    } catch (emailErr) {
+      console.error('[PhoneAuth] Email send failed:', emailErr.message);
+      // Don't block registration if email fails — log and continue
+    }
+
+    return res.json({
+      success:            true,
+      pendingVerification: true,
+      maskedEmail:        email.replace(/(.{2})(.*)(@.*)/, '$1***$3'),
+      expiresIn:          300,
+    });
+  } catch (err) {
+    console.error('[PhoneAuth] register error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/phone-auth/verify-email — step 2: verify OTP + create account ──
+router.post('/verify-email', async (req, res) => {
+  try {
+    const { name, email, phone: rawPhone, password, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ error: 'Email e código obrigatórios' });
+
+    // Find valid OTP for this email
+    const { data: requests } = await supabaseAdmin
+      .from('phone_auth_requests')
+      .select('*')
+      .eq('phone', 'email:' + email.toLowerCase())
+      .eq('used', false)
+      .gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    const req_ = requests?.[0];
+    if (!req_) return res.status(400).json({ error: 'Código expirado. Clique em "Reenviar código".' });
+    if ((req_.attempts || 0) >= 3) return res.status(400).json({ error: 'Muitas tentativas. Solicite novo código.' });
+
+    if (req_.otp_hash !== hashOTP(String(otp).trim())) {
+      await supabaseAdmin.from('phone_auth_requests')
+        .update({ attempts: (req_.attempts || 0) + 1 }).eq('id', req_.id);
+      const left = 3 - (req_.attempts || 0) - 1;
+      return res.status(400).json({ error: `Código incorreto. ${left} tentativa(s) restante(s).` });
+    }
+
+    // Mark OTP as used
+    await supabaseAdmin.from('phone_auth_requests').update({ used: true }).eq('id', req_.id);
+
+    // Use name/password from OTP record or from request body
+    const finalName     = name || req_.name || email.split('@')[0];
+    const finalPassword = password;
+
+    if (!finalPassword) return res.status(400).json({ error: 'Senha obrigatória' });
+
+    const phone  = rawPhone ? normalizePhone(rawPhone) : ('email_' + email.replace(/[^a-z0-9]/gi, '_'));
+    const salt   = generateSalt();
+    const pwHash = hashPassword(finalPassword, salt);
+
+    // Create user (phone_verified=true, approved=false — awaits admin)
+    const { error: insertErr } = await supabaseAdmin.from('phone_users').upsert([{
+      id:             phone,
+      phone,
+      email:          email.toLowerCase(),
+      name:           finalName,
+      password_hash:  pwHash,
+      password_salt:  salt,
+      phone_verified: true,
+      approved:       false,
+      updated_at:     new Date(),
+    }], { onConflict: 'id' });
+
+    if (insertErr) throw insertErr;
+
+    // Send confirmation email
+    try {
+      const { sendEmail } = require('./sheets');
+      await sendEmail({
+        to:      email,
         subject: 'Cadastro recebido — Belenergy Support Pro',
-        html: `<div style="font-family:sans-serif;max-width:420px;padding:32px 24px;background:#0C0E16;color:#EEF0F8;border-radius:16px;margin:0 auto">
-          <div style="font-size:36px;margin-bottom:16px;text-align:center">⚡</div>
-          <h2 style="color:#FFD700;margin-bottom:8px;text-align:center">Cadastro recebido!</h2>
-          <p style="color:#C4C9DC">Olá, <b>${first}</b>!</p>
-          <p style="color:#C4C9DC;line-height:1.6">Seu cadastro foi registrado com sucesso. Um administrador irá revisar e aprovar seu acesso em breve.</p>
-          <p style="color:#C4C9DC;line-height:1.6">Você receberá um email quando seu acesso for liberado.</p>
-          <hr style="border:none;border-top:1px solid #1C1F2E;margin:20px 0"/>
-          <p style="color:#6B7694;font-size:11px;text-align:center">Belenergy Support Pro · Sistema interno</p>
+        html: `<div style="font-family:sans-serif;max-width:440px;margin:0 auto;padding:32px 24px;background:#0C0E16;border-radius:16px;color:#EEF0F8">
+          <div style="text-align:center;font-size:40px;margin-bottom:16px">⚡</div>
+          <h2 style="color:#FFD700;text-align:center">Email verificado!</h2>
+          <p style="color:#C4C9DC;line-height:1.6">Seu email foi confirmado. Um administrador irá aprovar seu acesso em breve.</p>
+          <p style="color:#C4C9DC;line-height:1.6">Você receberá um email assim que for aprovado.</p>
         </div>`,
       });
-    } catch (emailErr) {
-      console.warn('[PhoneAuth] Confirmation email failed:', emailErr.message);
-    }
+    } catch {}
 
     return res.json({ success: true, pending: true });
   } catch (err) {
-    console.error('[PhoneAuth] register error:', err.message);
+    console.error('[PhoneAuth] verify-email error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/phone-auth/resend-otp — resend verification OTP ────────────────
+router.post('/resend-otp', async (req, res) => {
+  try {
+    const { email, name } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email obrigatório' });
+
+    // Rate limit
+    const { data: recent } = await supabaseAdmin
+      .from('phone_auth_requests')
+      .select('created_at').eq('phone', 'email:' + email.toLowerCase()).eq('used', false)
+      .gte('created_at', new Date(Date.now() - 60_000).toISOString()).limit(1);
+    if (recent?.length) return res.status(429).json({ error: 'Aguarde 1 minuto.' });
+
+    const otp = generateOTP();
+    await supabaseAdmin.from('phone_auth_requests').insert([{
+      phone: 'email:' + email.toLowerCase(), email, name: name || '',
+      otp_hash: hashOTP(otp),
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    }]);
+
+    const { sendEmail } = require('./sheets');
+    const first = (name || email).split(' ')[0].split('@')[0];
+    await sendEmail({
+      to: email,
+      subject: `${otp} — Novo código Belenergy`,
+      html: `<div style="font-family:sans-serif;padding:24px;background:#0C0E16;border-radius:12px;color:#EEF0F8;max-width:400px;margin:0 auto">
+        <p style="color:#C4C9DC">Olá ${first}! Seu novo código:</p>
+        <div style="text-align:center;padding:20px;background:#1C1F2E;border-radius:8px;margin:16px 0">
+          <span style="font-size:40px;letter-spacing:12px;color:#FFD700;font-weight:900;font-family:monospace">${otp}</span>
+        </div>
+        <p style="color:#6B7694;font-size:12px;text-align:center">Válido por 5 minutos.</p>
+      </div>`,
+    });
+
+    return res.json({ success: true, expiresIn: 300 });
+  } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 });
@@ -316,17 +463,20 @@ router.post('/login', async (req, res) => {
     if (!password) return res.status(400).json({ error: 'Senha obrigatória' });
 
     let pu;
-    if (rawInput) {
+    // Try email first (primary login method)
+    const lookupEmail = emailInput || rawInput;
+    if (lookupEmail && lookupEmail.includes('@')) {
+      const { data } = await supabaseAdmin.from('phone_users').select('*')
+        .ilike('email', lookupEmail.trim()).maybeSingle();
+      pu = data;
+    }
+    // Fallback: try phone if input looks like a number
+    if (!pu && rawInput && !rawInput.includes('@')) {
       try {
         const phone = normalizePhone(rawInput);
         const { data } = await supabaseAdmin.from('phone_users').select('*').eq('phone', phone).maybeSingle();
         pu = data;
-      } catch { /* not a valid phone, try email */ }
-    }
-    if (!pu && emailInput) {
-      const { data } = await supabaseAdmin.from('phone_users').select('*')
-        .ilike('email', emailInput.trim()).maybeSingle();
-      pu = data;
+      } catch {}
     }
 
     if (!pu) return res.status(401).json({ error: 'Número/email não encontrado.' });

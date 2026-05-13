@@ -142,25 +142,48 @@ export default function PhoneLogin({ onSuccess, onBack }) {
   }
 
   async function doRegister() {
-    if (!rName || !rPhone || !rPw || !rEmail) { setError('Preencha todos os campos obrigatórios'); return; }
-    if (rPw !== rPwC) { setError('As senhas não coincidem'); return; }
-    if (rPw.length < 8) { setError('Senha deve ter pelo menos 8 caracteres'); return; }
+    if (!rName || !rPw || !rEmail) { setError('Preencha nome, email e senha'); return; }
+    if (!rEmail.includes('@'))       { setError('Email inválido'); return; }
+    if (rPw !== rPwC)                { setError('As senhas não coincidem'); return; }
+    if (rPw.length < 8)              { setError('Senha deve ter pelo menos 8 caracteres'); return; }
     if (!/[0-9]/.test(rPw) || !/[a-zA-Z]/.test(rPw)) { setError('Senha precisa ter letras e números'); return; }
     setLoad(true); setError('');
-    const d = await apiPost('/api/phone-auth/register', { name:rName, email:rEmail, phone:rPhone, password:rPw }).catch(e => ({ error: e.message }));
+    const d = await apiPost('/api/phone-auth/register', {
+      name: rName, email: rEmail, phone: rPhone || null, password: rPw,
+    }).catch(e => ({ error: e.message }));
     setLoad(false);
-    if (!d.ok && !d.pending) { setError(d.error); return; }
-    setStep('pending'); // go straight to pending — no OTP step
+    if (d.pending) { setStep('pending'); return; }
+    if (d.error)   { setError(d.error); return; }
+    // OTP sent to email — go to verification step
+    setMasked(d.maskedEmail || rEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3'));
+    setCd(d.expiresIn || 300);
+    setOtp(['','','','','','']);
+    setStep('otp');
   }
 
   async function doVerifyOtp(code) {
+    // Called after register — verifies email OTP and creates account
     const c = code || otp.join('');
     if (c.length < 6) { setError('Digite os 6 dígitos'); return; }
     setLoad(true); setError('');
-    const d = await apiPost('/api/phone-auth/verify-otp', { phone: rPhone, otp: c }).catch(e => ({ error: e.message }));
+    const d = await apiPost('/api/phone-auth/verify-email', {
+      email: rEmail, otp: c, name: rName, phone: rPhone || null, password: rPw,
+    }).catch(e => ({ error: e.message }));
     setLoad(false);
     if (!d.ok) { setError(d.error); return; }
     setStep('pending');
+  }
+
+  async function doResendOtp() {
+    setLoad(true); setError(''); setInfo('');
+    const d = await apiPost('/api/phone-auth/resend-otp', {
+      email: rEmail, name: rName,
+    }).catch(e => ({ error: e.message }));
+    setLoad(false);
+    if (d.error) { setError(d.error); return; }
+    setOtp(['','','','','','']);
+    setCd(d.expiresIn || 300);
+    setInfo('✉️ Novo código enviado para ' + masked);
   }
 
   async function doChangePw() {
@@ -201,10 +224,10 @@ export default function PhoneLogin({ onSuccess, onBack }) {
   // ── LOGIN ────────────────────────────────────────────────────────────────────
   if (step === 'login') return (
     <div style={S.wrap}>
-      <div><div style={S.title}>🔑 Login</div><div style={S.sub}>Telefone ou email + senha.</div></div>
+      <div><div style={S.title}>🔑 Login</div><div style={S.sub}>Entre com seu email e senha.</div></div>
       {error && <div style={S.error}>{error}</div>}
       <Field label="Telefone ou Email">
-        <Inp placeholder="(19) 99999-9999 ou email" value={phone} autoFocus onChange={e=>setPhone(e.target.value)} onKeyDown={e=>e.key==='Enter'&&doLogin()} />
+        <Inp placeholder="seu@email.com" value={phone} autoFocus onChange={e=>setPhone(e.target.value)} onKeyDown={e=>e.key==='Enter'&&doLogin()} />
       </Field>
       <Field label="Senha">
         <PwInput value={pw} onChange={e=>setPw(e.target.value)} placeholder="Sua senha" onKeyDown={e=>e.key==='Enter'&&doLogin()} />
@@ -217,7 +240,7 @@ export default function PhoneLogin({ onSuccess, onBack }) {
   // ── REGISTER ─────────────────────────────────────────────────────────────────
   if (step === 'register') return (
     <div style={S.wrap}>
-      <div><div style={S.title}>✏️ Criar conta</div><div style={S.sub}>Um administrador aprovará seu acesso após o cadastro.</div></div>
+      <div><div style={S.title}>✏️ Criar conta</div><div style={S.sub}>Preencha seus dados. Um administrador aprovará seu acesso.</div></div>
       {error && <div style={S.error}>{error}</div>}
       <Field label="Nome completo *">
         <Inp placeholder="Seu nome" value={rName} autoFocus onChange={e=>setRName(e.target.value)} />
@@ -225,7 +248,7 @@ export default function PhoneLogin({ onSuccess, onBack }) {
       <Field label="Email *" hint="O código de verificação de 6 dígitos será enviado aqui">
         <Inp type="email" placeholder="seu@email.com" value={rEmail} onChange={e=>setREmail(e.target.value)} />
       </Field>
-      <Field label="WhatsApp (com DDD)" hint="Código de verificação será enviado aqui">
+      <Field label="WhatsApp (com DDD)" hint="Opcional — para notificações via WhatsApp (sem verificação obrigatória)">
         <Inp type="tel" placeholder="(19) 99999-9999" value={fmtPhone(rPhone)} onChange={e=>setRPhone(e.target.value.replace(/\D/g,''))} style={{ letterSpacing:1 }} />
       </Field>
       <Field label="Senha *" hint="Mínimo 8 caracteres com letra e número">
@@ -249,16 +272,25 @@ export default function PhoneLogin({ onSuccess, onBack }) {
   if (step === 'otp') return (
     <div style={S.wrap}>
       <div>
-        <div style={S.title}>🔐 Verificar WhatsApp</div>
-        <div style={S.sub}>Código enviado para seu email.{cd>0&&<><br/><span style={{ color:'var(--y)',fontWeight:700 }}>Expira em {CD}</span></>}</div>
+        <div style={S.title}>📧 Verificar Email</div>
+        <div style={S.sub}>
+          Enviamos um código de 6 dígitos para <b>{masked}</b>.<br/>
+          {cd > 0
+            ? <span style={{ color:'var(--y)', fontWeight:700 }}>Expira em {Math.floor(cd/60)}:{String(cd%60).padStart(2,'0')}</span>
+            : <span style={{ color:'var(--re)' }}>Código expirado — reenvie</span>}
+        </div>
       </div>
       {error && <div style={S.error}>{error}</div>}
+      {info  && <div style={{ padding:'8px 12px', background:'rgba(34,197,94,.1)', border:'1px solid rgba(34,197,94,.3)', borderRadius:'var(--rs)', color:'var(--gr)', fontSize:13 }}>{info}</div>}
       <OtpBoxes otp={otp} setOtp={setOtp} onDone={doVerifyOtp} />
-      <button style={{ ...S.btn, opacity:loading?.7:1 }} onClick={() => doVerifyOtp()} disabled={loading||otp.join('').length<6}>
+      <button style={{ ...S.btn, opacity:(loading||otp.join('').length<6)?.7:1 }}
+        onClick={() => doVerifyOtp()} disabled={loading||otp.join('').length<6}>
         {loading ? '⟳ Verificando...' : '✓ Confirmar código'}
       </button>
-      {cd===0 && <button style={S.btnGhost} onClick={() => { setOtp(['','','','','','']); go('register'); }}>↺ Reenviar código</button>}
-      <button style={S.btnGhost} onClick={() => go('register')}>← Voltar</button>
+      <button style={S.btnGhost} onClick={doResendOtp} disabled={loading}>
+        {loading ? '⟳...' : '↺ Reenviar código'}
+      </button>
+      <button style={S.btnGhost} onClick={() => { go('register'); setInfo(''); }}>← Voltar</button>
     </div>
   );
 
@@ -270,7 +302,7 @@ export default function PhoneLogin({ onSuccess, onBack }) {
         <div style={S.title}>Aguardando aprovação</div>
         <div style={{ ...S.sub, marginTop:8 }}>
           Email verificado!{rName&&` Olá ${rName.split(' ')[0]}!`}<br/><br/>
-          Um administrador irá aprovar seu acesso. Você receberá um email quando for aprovado.
+          Um administrador irá revisar e aprovar seu acesso. Você receberá um email de confirmação assim que for aprovado.
         </div>
       </div>
       <button style={S.btnGhost} onClick={onBack}>← Voltar ao login</button>
