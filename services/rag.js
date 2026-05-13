@@ -178,6 +178,85 @@ async function callGroq(system, user) {
   return { text: data.choices?.[0]?.message?.content || '', tokens: data.usage?.total_tokens || 0 };
 }
 
+
+// ── Text Search Tier — Solution Centre (no embeddings needed) ─────────────────
+// Searches solutions table by keywords in title + content + brand + tags.
+// This ensures Solution Centre is ALWAYS searched even before Reindexar runs.
+async function textSearchSolutions(query, opts) {
+  opts = opts || {};
+  try {
+    // Build search terms from query
+    const terms = query.toLowerCase()
+      .replace(/[^a-z0-9àáâãéêíóôõúüç\s]/gi, ' ')
+      .split(/\s+/)
+      .filter(t => t.length >= 3)
+      .slice(0, 8); // max 8 terms
+
+    if (!terms.length) return [];
+
+    // Fetch solutions and score them in JS (avoids needing tsvector migration)
+    const { data, error } = await supabaseAdmin
+      .from('solutions')
+      .select('id, title, content, brand, tags, author_name')
+      .order('id', { ascending: false })
+      .limit(200);
+
+    if (error || !data?.length) return [];
+
+    const brand = (opts.brand || '').toLowerCase();
+
+    return data
+      .map(sol => {
+        const haystack = [
+          sol.title   || '',
+          sol.content || '',
+          sol.brand   || '',
+          (sol.tags   || []).join(' '),
+        ].join(' ').toLowerCase();
+
+        let score = 0;
+        let termHits = 0;
+        for (const term of terms) {
+          if (haystack.includes(term)) {
+            termHits++;
+            // Title matches score higher
+            if ((sol.title || '').toLowerCase().includes(term)) score += 4;
+            // Brand match scores high
+            else if ((sol.brand || '').toLowerCase().includes(term)) score += 3;
+            // Tags match
+            else if ((sol.tags || []).some(t => t.toLowerCase().includes(term))) score += 2;
+            else score += 1;
+          }
+        }
+
+        // Require at least 1 term hit
+        if (termHits === 0) return null;
+
+        // Brand boost
+        if (brand && (sol.brand || '').toLowerCase() === brand) score += 5;
+
+        // Normalize to similarity-like score (0.30 - 0.68 range — below hot threshold)
+        const normalized = Math.min(0.68, 0.30 + (score / (terms.length * 5)));
+
+        return {
+          id:         sol.id,
+          title:      sol.title,
+          content:    (sol.content || '').slice(0, 800),
+          brand:      sol.brand,
+          tags:       sol.tags || [],
+          similarity: normalized,
+          source:     'text',
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, opts.topK || 5);
+  } catch (err) {
+    console.warn('[RAG] Text search error:', err.message);
+    return [];
+  }
+}
+
 // ── MAIN: ragQuery ────────────────────────────────────────────────────────────
 async function ragQuery(rawQuery, opts) {
   opts = opts || {};
@@ -197,32 +276,57 @@ async function ragQuery(rawQuery, opts) {
   const vec = await embed(searchQuery);
   if (!vec) console.warn('[RAG] Embedding failed — both Gemini and Ollama offline');
 
-  // ── Step 3: Hot tier search ───────────────────────────────────────────────
-  const hotChunks = vec ? await hotSearch(vec) : [];
+  // ── Step 3: Hot tier — pgvector (Solution Centre with embeddings) ───────────
+  const hotChunks         = vec ? await hotSearch(vec) : [];
   const hotAboveThreshold = hotChunks.filter(c => c.similarity >= HOT_THRESHOLD);
 
-  let allChunks  = hotChunks;
-  let usedCold   = false;
+  let allChunks = [...hotChunks];
+  let usedText  = false;
+  let usedCold  = false;
 
-  // ── Step 4: Cold tier fallback ────────────────────────────────────────────
+  // ── Step 4: Text Search tier — Solution Centre (always, no embeddings needed)
+  // Runs when hot tier finds nothing above threshold OR embeddings not available.
+  // This is the PRIORITY fallback — searches the same solutions table by keywords.
   if (hotAboveThreshold.length === 0) {
-    console.log('[RAG] Hot tier below threshold — trying cold (FTS)');
+    console.log('[RAG] Hot tier below threshold — searching Solution Centre by text');
+    const textChunks = await textSearchSolutions(searchQuery, {
+      topK: TOP_K_RETRIEVE,
+      brand: brand || null,
+    });
+    if (textChunks.length > 0) {
+      // Merge: hot results + text results (deduplicate by id)
+      const seenIds = new Set(hotChunks.map(c => String(c.id)));
+      const newTextChunks = textChunks.filter(c => !seenIds.has(String(c.id)));
+      allChunks = hotChunks.concat(newTextChunks);
+      usedText  = true;
+      console.log('[RAG] Text search found', newTextChunks.length, 'Solution Centre entries');
+    }
+  }
+
+  // ── Step 5: Cold tier — GitHub JSON (historical knowledge base) ───────────
+  // Only runs if BOTH hot AND text search found nothing useful.
+  const bestSoFar = allChunks.filter(c => c.similarity >= FALLBACK_THRESHOLD);
+  if (bestSoFar.length === 0) {
+    console.log('[RAG] Solution Centre empty — trying cold tier (GitHub JSON)');
     const cold = await janitor.coldSearch(searchQuery, { topK: TOP_K_RETRIEVE, brand: brand || null });
     if (cold.chunks.length > 0) {
-      allChunks = hotChunks.concat(cold.chunks); // merge hot + cold
+      allChunks = allChunks.concat(cold.chunks);
       usedCold  = true;
     }
   }
 
-  // ── Step 5: Rank ──────────────────────────────────────────────────────────
+  // ── Step 6: Rank ──────────────────────────────────────────────────────────
   const topChunks = rankChunks(allChunks, { brand });
   const topScore  = topChunks.length > 0 ? topChunks[0].score : 0;
-  const isFallback = !vec || topChunks.length === 0 || topScore < FALLBACK_THRESHOLD;
+  const isFallback = topChunks.length === 0 || topScore < FALLBACK_THRESHOLD;
 
   console.log(
     '[RAG]', Date.now() - t0 + 'ms |',
-    'hot=' + hotChunks.length, 'cold=' + (usedCold ? 'yes' : 'no'),
-    'top=' + topChunks.length, 'score=' + topScore.toFixed(2),
+    'hot=' + hotChunks.length,
+    'text=' + (usedText ? 'yes' : 'no'),
+    'cold=' + (usedCold ? 'yes' : 'no'),
+    'top=' + topChunks.length,
+    'score=' + topScore.toFixed(2),
     'fallback=' + isFallback
   );
 
@@ -242,13 +346,13 @@ async function ragQuery(rawQuery, opts) {
       '## Nenhuma solução verificada encontrada',
       '',
       brand
-        ? `Sem soluções indexadas para **${brand}** com relevância suficiente.`
-        : 'Sem soluções indexadas com relevância suficiente.',
+        ? `Não encontrei soluções no Centro de Soluções para **${brand}**.`
+        : 'Não encontrei soluções cadastradas no Centro de Soluções para esta consulta.',
       '',
-      '**Para resolver:**',
-      '- Verifique o Centro de Soluções para este equipamento.',
-      '- Execute **Reindexar** no painel AI Obs.',
-      '- Sua consulta foi salva em **Curadoria Pendente** para análise.',
+      '**O que fazer:**',
+      '- Adicione uma solução para este problema no **Centro de Soluções**.',
+      '- Se já há soluções: clique em **Reindexar** no AI Obs para gerar embeddings.',
+      '- Sua consulta foi salva em **Curadoria Pendente** para revisão.',
       '',
       '_Resposta não gerada por IA — consulta registrada para revisão._',
     ].join('\n');
@@ -269,6 +373,7 @@ async function ragQuery(rawQuery, opts) {
     sources:       topChunks.map(c => ({ id: c.id, title: c.title, brand: c.brand, score: parseFloat(c.score.toFixed(3)), tier: c.source })),
     fallback:      isFallback,
     similarity:    topScore,
+    usedTextTier:  usedText,
     usedColdTier:  usedCold,
     tokensUsed,
     elapsedMs:     Date.now() - t0,

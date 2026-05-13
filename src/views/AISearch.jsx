@@ -35,19 +35,25 @@ function ConfidenceMeter({ score, fallback }) {
 // ── Source chips ──────────────────────────────────────────────────────────────
 function SourceChips({ sources }) {
   if (!sources?.length) return null;
+  const tierStyle = {
+    hot:  { bg:'rgba(255,215,0,.1)',   color:'var(--y)',  border:'rgba(255,215,0,.25)',  icon:'🔥', label:'Centro de Soluções' },
+    text: { bg:'rgba(34,197,94,.08)',  color:'var(--gr)', border:'rgba(34,197,94,.2)',   icon:'📚', label:'Centro de Soluções' },
+    cold: { bg:'rgba(96,165,250,.1)',  color:'var(--bl)', border:'rgba(96,165,250,.2)',  icon:'❄️', label:'Base histórica' },
+  };
   return (
     <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:10 }}>
-      {sources.map((s, i) => (
-        <span key={i} style={{
-          fontSize:10, fontWeight:700, padding:'2px 9px', borderRadius:999,
-          background: s.tier === 'hot' ? 'rgba(255,215,0,.1)' : 'rgba(96,165,250,.1)',
-          color:      s.tier === 'hot' ? 'var(--y)' : 'var(--bl)',
-          border:     `1px solid ${s.tier === 'hot' ? 'rgba(255,215,0,.25)' : 'rgba(96,165,250,.2)'}`,
-        }}>
-          {s.tier === 'hot' ? '🔥' : '❄️'} {s.title}
-          {s.score && <span style={{ opacity:.7 }}> · {Math.round(s.score * 100)}%</span>}
-        </span>
-      ))}
+      {sources.map((s, i) => {
+        const t = tierStyle[s.tier] || tierStyle.cold;
+        return (
+          <span key={i} title={t.label} style={{
+            fontSize:10, fontWeight:700, padding:'2px 9px', borderRadius:999,
+            background: t.bg, color: t.color, border: `1px solid ${t.border}`,
+          }}>
+            {t.icon} {s.title}
+            {s.score && <span style={{ opacity:.7 }}> · {Math.round(s.score * 100)}%</span>}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -280,9 +286,14 @@ export default function AISearch({ showToast, user }) {
                   <SourceChips sources={item.result.sources} />
 
                   {/* Cold tier warning */}
+                  {item.result.usedTextTier && !item.result.usedColdTier && (
+                    <div style={{ padding:'6px 10px', background:'rgba(34,197,94,.07)', border:'1px solid rgba(34,197,94,.2)', borderRadius:7, marginBottom:10, fontSize:11, color:'var(--gr)' }}>
+                      📚 Encontrado no Centro de Soluções por busca de texto — execute <b>Reindexar</b> no AI Obs para melhorar a precisão com embeddings.
+                    </div>
+                  )}
                   {item.result.usedColdTier && (
                     <div style={{ padding:'6px 10px', background:'rgba(96,165,250,.07)', border:'1px solid rgba(96,165,250,.2)', borderRadius:7, marginBottom:10, fontSize:11, color:'var(--bl)' }}>
-                      ❄️ Resultado do repositório de conhecimento frio — precisão pode ser menor que o tier quente.
+                      ❄️ Resultado da base histórica (GitHub) — adicione a solução no Centro de Soluções para maior precisão.
                     </div>
                   )}
 

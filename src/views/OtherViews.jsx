@@ -1072,6 +1072,34 @@ function ApprovalManager({ user, showToast }) {
 
   useEffect(() => { if (isAdmin) load(); }, [isAdmin, load]);
 
+  async function approvePhoneUser(id, action, roleId = 3) {
+    try {
+      await api(`/api/phone-auth/admin/approve/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        body: JSON.stringify({ action, role_id: roleId }),
+      });
+      showToast(action === 'approve' ? '✅ Usuário aprovado!' : '❌ Usuário rejeitado');
+      load();
+    } catch (e) { showToast('Erro: ' + e.message, 'warn'); }
+  }
+
+  async function resetPhonePassword(id) {
+    const pw = window.prompt('Senha temporária para o usuário (mín. 8 chars, letra + número):');
+    if (!pw) return;
+    if (pw.length < 8 || !/[0-9]/.test(pw) || !/[a-zA-Z]/.test(pw)) {
+      showToast('Senha fraca — mínimo 8 caracteres com letra e número', 'warn');
+      return;
+    }
+    try {
+      await api(`/api/phone-auth/admin/reset-password/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        body: JSON.stringify({ tempPassword: pw }),
+      });
+      showToast('✅ Senha temporária definida. Usuário será notificado por email.');
+      load();
+    } catch (e) { showToast('Erro: ' + e.message, 'warn'); }
+  }
+
   async function addApproval() {
     if (!newEmail.trim()) return;
     setAdding(true);
@@ -1225,7 +1253,7 @@ function ApprovalManager({ user, showToast }) {
                       </>
                     )}
                     {u.approved && (
-                      <button onClick={() => setResetId(resetId===u.id ? null : u.id)}
+                      <button onClick={() => resetPhonePassword(u.id)}
                         style={{ padding:'6px 12px', background:'rgba(96,165,250,.1)', color:'var(--bl)', border:'1px solid rgba(96,165,250,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
                         🔐 Redefinir Senha
                       </button>
