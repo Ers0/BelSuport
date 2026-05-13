@@ -278,4 +278,125 @@ router.post('/reindex', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+
+// ── POST /api/analysis/alarm-knowledge/import — bulk import from JSON ─────────
+// Accepts array of alarm objects. Maps common field names automatically.
+// Supports: { code/alarme/alarm_code, description/descricao, cause/causa,
+//             solution/solucao, severity/severidade, fabricante/brand, category }
+router.post('/alarm-knowledge/import', async (req, res) => {
+  try {
+    const { data: rawData, fabricante: defaultFabricante } = req.body;
+    if (!Array.isArray(rawData) || !rawData.length) {
+      return res.status(400).json({ error: 'Envie um array JSON com os alarmes' });
+    }
+
+    const FIELD_MAP = {
+      code:        ['code', 'codigo', 'alarme', 'alarm_code', 'alarm', 'cod'],
+      description: ['description', 'descricao', 'desc', 'nome', 'name', 'title', 'titulo'],
+      cause:       ['cause', 'causa', 'reason', 'motivo'],
+      solution:    ['solution', 'solucao', 'fix', 'correcao', 'resolucao', 'action'],
+      severity:    ['severity', 'severidade', 'level', 'nivel', 'priority', 'prioridade'],
+      fabricante:  ['fabricante', 'brand', 'marca', 'manufacturer'],
+      category:    ['category', 'categoria', 'type', 'tipo'],
+    };
+
+    function getField(obj, keys) {
+      for (const k of keys) {
+        if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return String(obj[k]).trim();
+      }
+      return null;
+    }
+
+    const rows = rawData.map(item => ({
+      fabricante:  getField(item, FIELD_MAP.fabricante) || defaultFabricante || 'Geral',
+      code:        getField(item, FIELD_MAP.code)        || null,
+      description: getField(item, FIELD_MAP.description) || '',
+      cause:       getField(item, FIELD_MAP.cause)       || null,
+      solution:    getField(item, FIELD_MAP.solution)    || null,
+      severity:    getField(item, FIELD_MAP.severity)    || 'medium',
+      category:    getField(item, FIELD_MAP.category)    || null,
+      updated_at:  new Date(),
+    })).filter(r => r.code); // skip rows without a code
+
+    if (!rows.length) {
+      return res.status(400).json({
+        error: 'Nenhum alarme com código válido encontrado.',
+        hint:  'Verifique se os objetos têm um campo: code, codigo, alarme, alarm_code',
+        sample: rawData[0],
+      });
+    }
+
+    // Upsert — update existing codes, insert new ones
+    const { data, error } = await supabaseAdmin
+      .from('alarm_knowledge')
+      .upsert(rows, { onConflict: 'fabricante,code', ignoreDuplicates: false })
+      .select('id');
+
+    if (error) throw error;
+
+    return res.json({
+      success:  true,
+      imported: rows.length,
+      skipped:  rawData.length - rows.length,
+      message:  rows.length + ' alarmes importados para ' + [...new Set(rows.map(r => r.fabricante))].join(', '),
+    });
+  } catch (err) {
+    console.error('[Alarm import] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/analysis/alarm-knowledge — list all entries ─────────────────────
+router.get('/alarm-knowledge', async (req, res) => {
+  try {
+    const { fabricante } = req.query;
+    let query = supabaseAdmin.from('alarm_knowledge').select('*').order('fabricante').order('code');
+    if (fabricante) query = query.eq('fabricante', fabricante);
+    const { data, error } = await query;
+    if (error) throw error;
+    return res.json(data || []);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /api/analysis/alarm-knowledge/:id ──────────────────────────────────
+router.delete('/alarm-knowledge/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('alarm_knowledge').delete().eq('id', req.params.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ── GET /api/analysis/curation — pending curation queue (admin) ───────────────
+router.get('/curation', async (req, res) => {
+  try {
+    const { getPendingCuration } = require('../services/janitor');
+    const items = await getPendingCuration({ limit: parseInt(req.query.limit) || 50 });
+    return res.json(items);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/analysis/curation/:id/resolve ───────────────────────────────────
+router.post('/curation/:id/resolve', async (req, res) => {
+  try {
+    const { resolveCuration } = require('../services/janitor');
+    await resolveCuration(req.params.id, req.user?.id);
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/analysis/promote/:id — promote cold solution to hot tier ────────
+router.post('/promote/:id', async (req, res) => {
+  try {
+    const { promoteToHot } = require('../services/janitor');
+    const result = await promoteToHot(req.params.id);
+    return res.json(result);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;

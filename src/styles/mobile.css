@@ -1,297 +1,210 @@
-/* ============================================================
-   Belenergy Support Pro — Mobile & Android Styles
-   Add to src/index.css (append at the end)
-   Breakpoints: ≤768px = tablet/mobile, ≤480px = phone
-   ============================================================ */
+/* =================================================================
+   Belenergy Support Pro — Mobile CSS v2
+   Append to: src/styles/global.css
+   ================================================================= */
 
-/* ── Safe area insets (notch / rounded corner phones) ──────── */
 :root {
-  --safe-top:    env(safe-area-inset-top,    0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-left:   env(safe-area-inset-left,   0px);
-  --safe-right:  env(safe-area-inset-right,  0px);
-  --bottom-nav-h: 60px;
+  --nav-h: 58px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
 }
 
-/* ── Prevent iOS font size adjustment ───────────────────────── */
-* { -webkit-text-size-adjust: 100%; }
-
-/* ── Minimum touch targets (WCAG + Android guidelines) ──────── */
-button, [role="button"], a, select, input[type="checkbox"], input[type="radio"] {
-  min-height: 44px;
-  min-width:  44px;
-}
-
-/* ── Input zoom prevention (iOS zooms if font < 16px) ───────── */
+/* Prevent iOS zoom on input focus */
 @media (max-width: 768px) {
-  input, textarea, select {
-    font-size: 16px !important;
-  }
+  input, textarea, select { font-size: 16px !important; }
+  * { -webkit-text-size-adjust: 100%; }
+  a, button { -webkit-tap-highlight-color: rgba(255,215,0,.15); }
 }
 
-/* ── Tap highlight ───────────────────────────────────────────── */
-a, button { -webkit-tap-highlight-color: rgba(255, 215, 0, 0.15); }
-
-/* ============================================================
-   LAYOUT — Sidebar becomes bottom navigation on mobile
-   ============================================================ */
+/* ── LAYOUT: Sidebar → Bottom Nav ──────────────────────────────── */
 @media (max-width: 768px) {
+  /* The app shell needs to know about the bottom nav */
+  body, #root { overflow-x: hidden; }
 
-  /* Root layout: stack vertically, sidebar at bottom */
-  #root > div, .app-shell {
-    flex-direction: column !important;
+  /* Push main content above the bottom nav */
+  main, .main-content,
+  [class*="view"], [class*="page"],
+  div[style*="padding:'28px"] {
+    padding-bottom: calc(var(--nav-h) + var(--safe-b) + 12px) !important;
   }
 
-  /* Sidebar → bottom nav bar */
-  .sidebar, [class*="sidebar"], nav[class*="side"] {
-    position:   fixed !important;
-    bottom:     0 !important;
-    left:       0 !important;
-    right:      0 !important;
-    top:        auto !important;
-    width:      100% !important;
-    height:     calc(var(--bottom-nav-h) + var(--safe-bottom)) !important;
-    min-height: unset !important;
-    max-height: unset !important;
+  /* Sidebar: becomes fixed bottom bar */
+  nav, aside,
+  div[style*="width:220"], div[style*="width: 220"],
+  div[style*="minWidth:220"], div[style*="min-width:220"] {
+    position:       fixed !important;
+    bottom:         0 !important;
+    left:           0 !important;
+    right:          0 !important;
+    top:            auto !important;
+    width:          100vw !important;
+    max-width:      100vw !important;
+    min-width:      unset !important;
+    height:         calc(var(--nav-h) + var(--safe-b)) !important;
+    max-height:     unset !important;
     flex-direction: row !important;
-    justify-content: space-around !important;
-    align-items: center !important;
-    padding: 0 8px var(--safe-bottom) !important;
-    border-top: 1px solid var(--b2) !important;
-    border-right: none !important;
-    z-index: 1000 !important;
-    overflow: hidden !important;
-    background: var(--s1) !important;
+    align-items:    center !important;
+    justify-content:space-around !important;
+    padding:        0 4px var(--safe-b) !important;
+    overflow:       hidden !important;
+    border-right:   none !important;
+    border-top:     1px solid var(--b2) !important;
+    z-index:        1000 !important;
+    background:     var(--s1) !important;
   }
 
-  /* Nav items in bottom bar */
-  .sidebar button, .sidebar a, nav[class*="side"] button {
+  /* Nav buttons in bottom bar */
+  nav button, aside button {
     flex-direction: column !important;
-    justify-content: center !important;
-    align-items: center !important;
-    gap: 2px !important;
-    padding: 6px 4px !important;
-    font-size: 10px !important;
-    min-width: 52px !important;
-    min-height: 44px !important;
-    border-radius: 8px !important;
-    flex: 1 !important;
-    max-width: 80px !important;
+    gap:            2px !important;
+    padding:        6px 4px !important;
+    font-size:      9px !important;
+    min-height:     44px !important;
+    min-width:      44px !important;
+    flex:           1 !important;
+    max-width:      72px !important;
+    border-radius:  10px !important;
+    overflow:       hidden !important;
   }
 
-  /* Hide sidebar labels that are too long on mobile */
-  .sidebar .nav-label { max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  /* Main content area — add bottom padding for nav bar */
-  .main-content, main, [class*="content"] {
-    margin-left: 0 !important;
-    padding-bottom: calc(var(--bottom-nav-h) + var(--safe-bottom) + 12px) !important;
-    padding-top: calc(var(--safe-top) + 8px) !important;
-    width: 100% !important;
-    max-width: 100% !important;
+  /* Hide long text in nav items */
+  nav button span:last-child,
+  aside button span:last-child { 
+    max-width: 56px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
+
+  /* Notification bell — reposition */
+  nav button[title*="notif"],
+  button[aria-label*="notif"] { position: relative; }
 }
 
-/* ============================================================
-   CARDS & GRIDS — Stack on mobile
-   ============================================================ */
+/* ── CARDS & GRIDS ─────────────────────────────────────────────── */
 @media (max-width: 768px) {
-
-  /* Dashboard stat cards: 2 columns on tablet, 2 on phone */
-  [class*="stat-grid"], [class*="stats-row"], [class*="card-grid"] {
+  /* 2-col stat grids */
+  div[style*="gridTemplateColumns:'repeat(4"],
+  div[style*="gridTemplateColumns: repeat(4"] {
     grid-template-columns: repeat(2, 1fr) !important;
-    gap: 8px !important;
+  }
+  div[style*="gridTemplateColumns:'repeat(3"],
+  div[style*="gridTemplateColumns: repeat(3"] {
+    grid-template-columns: repeat(2, 1fr) !important;
   }
 
-  /* Full-width cards on phone */
-  @media (max-width: 480px) {
-    [class*="stat-grid"], [class*="stats-row"] {
-      grid-template-columns: 1fr 1fr !important;
-    }
-  }
-
-  /* Force card stacking in flex layouts */
-  [class*="grid"], [class*="row"], [class*="columns"] {
+  /* Stack horizontal flex rows */
+  div[style*="display:'flex"][style*="gap:"],
+  div[style*='display:"flex"'][style*="gap:"] {
     flex-wrap: wrap !important;
   }
 }
 
-/* ============================================================
-   TABLES — Horizontal scroll on mobile
-   ============================================================ */
+/* ── TABLES ────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   table {
     display: block !important;
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch !important;
     white-space: nowrap !important;
+    max-width: 100% !important;
   }
 }
 
-/* ============================================================
-   MODALS & DRAWERS — Full screen on mobile
-   ============================================================ */
+/* ── MODALS / PANELS ───────────────────────────────────────────── */
 @media (max-width: 768px) {
-
-  /* Modal overlay — full screen */
-  [class*="modal"], [class*="overlay"], [class*="drawer"], [class*="panel"] {
-    position: fixed !important;
-    inset: 0 !important;
-    width:  100% !important;
+  /* Full-screen modals */
+  div[style*="position:'fixed'"][style*="zIndex"],
+  div[style*='position:"fixed"'][style*="zIndex"] {
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
     height: 100% !important;
-    max-width:  100% !important;
     max-height: 100% !important;
-    border-radius: 0 !important;
     margin: 0 !important;
+    border-radius: 0 !important;
     overflow-y: auto !important;
     -webkit-overflow-scrolling: touch !important;
   }
 
-  /* Slide-up sheet pattern for modals */
-  [class*="modal"] > div:first-child,
-  [class*="overlay"] > div:first-child {
-    border-radius: 16px 16px 0 0 !important;
-    min-height: 60vh !important;
-    margin-top: auto !important;
-  }
-}
-
-/* ============================================================
-   WIZARD (Registro) — Full width steps on mobile
-   ============================================================ */
-@media (max-width: 768px) {
-
-  /* Step indicators: compact dots */
-  [class*="step-indicator"], [class*="wizard-steps"] {
-    flex-wrap: wrap !important;
-    gap: 4px !important;
-  }
-
-  [class*="step-indicator"] span, [class*="wizard-steps"] span {
-    font-size: 11px !important;
-    padding: 4px 8px !important;
-  }
-
-  /* Form fields full width */
-  [class*="form-row"], [class*="field-row"] {
-    flex-direction: column !important;
-  }
-
-  [class*="form-row"] > *, [class*="field-row"] > * {
-    width: 100% !important;
-  }
-}
-
-/* ============================================================
-   AGENDA — Stacked layout on mobile
-   ============================================================ */
-@media (max-width: 768px) {
-
-  /* Contact columns: vertical */
-  [class*="contact-columns"], [class*="three-col"] {
-    flex-direction: column !important;
-  }
-
-  [class*="contact-columns"] > * {
-    width: 100% !important;
-    max-height: 40vh !important;
-    overflow-y: auto !important;
-    border-right: none !important;
-    border-bottom: 1px solid var(--b1) !important;
-  }
-}
-
-/* ============================================================
-   NOTIFICATION BELL — Mobile position
-   ============================================================ */
-@media (max-width: 768px) {
-  [class*="bell-panel"], [class*="notification-panel"] {
-    position: fixed !important;
+  /* Exception: toast notifications and small popups */
+  div[style*="position:'fixed'"][style*="bottom"],
+  div[style*='position:"fixed"'][style*="bottom"] {
+    bottom: calc(var(--nav-h) + var(--safe-b) + 8px) !important;
     top: auto !important;
-    bottom: calc(var(--bottom-nav-h) + var(--safe-bottom) + 8px) !important;
-    right: 8px !important;
-    left: 8px !important;
+    height: auto !important;
     max-height: 70vh !important;
-    overflow-y: auto !important;
     border-radius: 16px !important;
   }
 }
 
-/* ============================================================
-   SOLUTION CENTRE — Mobile layout
-   ============================================================ */
+/* ── AGENDA ────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
+  /* Contacts grid: 2 column → single column */
+  div[style*="gridTemplateColumns:'280px 1fr'"],
+  div[style*="gridTemplateColumns:'300px 1fr'"] {
+    grid-template-columns: 1fr !important;
+  }
+}
 
-  /* Sidebar (brand filter) collapses to horizontal scroll */
-  [class*="sol-sidebar"], [class*="solution-sidebar"] {
+/* ── SOLUTION CENTRE ───────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Brand sidebar: horizontal scroll */
+  div[style*="width:180px"],
+  div[style*="minWidth:180px"] {
+    width: 100% !important;
+    min-width: unset !important;
     flex-direction: row !important;
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch !important;
-    padding: 0 0 8px 0 !important;
+    padding: 0 0 8px !important;
     border-right: none !important;
     border-bottom: 1px solid var(--b1) !important;
-    max-height: none !important;
-    min-width: unset !important;
-  }
-
-  [class*="sol-sidebar"] button {
-    white-space: nowrap !important;
-    flex-shrink: 0 !important;
   }
 }
 
-/* ============================================================
-   TYPOGRAPHY — Scale down on mobile
-   ============================================================ */
+/* ── TYPOGRAPHY ────────────────────────────────────────────────── */
 @media (max-width: 480px) {
-  h1, [class*="page-title"] { font-size: 18px !important; }
-  h2, [class*="section-title"] { font-size: 15px !important; }
-  h3 { font-size: 13px !important; }
+  h1, [style*="fontSize:26"],
+  [style*="fontSize: 26"] { font-size: 20px !important; }
+  
+  h2, [style*="fontSize:22"],
+  [style*="fontSize: 22"] { font-size: 17px !important; }
 
-  /* Reduce padding on small screens */
-  [class*="page-"], [class*="container"], [class*="wrapper"] {
-    padding-left: 12px !important;
-    padding-right: 12px !important;
+  /* Reduce padding on containers */
+  div[style*="padding:'28px 32px'"],
+  div[style*='padding:"28px 32px"'] {
+    padding: 16px 12px !important;
   }
 }
 
-/* ============================================================
-   ANDROID KEYBOARD — Prevent layout jump
-   ============================================================ */
+/* ── ANDROID KEYBOARD ──────────────────────────────────────────── */
 @media (max-width: 768px) {
-  /* When keyboard opens on Android, use dvh (dynamic viewport) */
-  .app-shell, #root {
-    height: 100dvh;
-    overflow: hidden;
-  }
-
-  /* Scrollable content area */
-  .main-content {
+  body { height: 100dvh; }
+  #root { height: 100dvh; overflow: hidden; }
+  
+  /* Scrollable view area */
+  main, .main-content { 
     overflow-y: auto !important;
     -webkit-overflow-scrolling: touch !important;
+    height: calc(100dvh - var(--nav-h) - var(--safe-b)) !important;
   }
 }
 
-/* ============================================================
-   PULL-TO-REFRESH hint (visual only)
-   ============================================================ */
-@media (max-width: 768px) {
-  .main-content::before {
-    content: '';
-    display: block;
-    height: 4px;
-    background: linear-gradient(to bottom, var(--y), transparent);
-    opacity: 0;
-    transition: opacity 0.3s;
-  }
-}
-
-/* ============================================================
-   DARK MODE OLED optimization (Android AMOLED screens)
-   ============================================================ */
+/* ── AMOLED optimization ───────────────────────────────────────── */
 @media (prefers-color-scheme: dark) and (max-width: 768px) {
-  /* True black for AMOLED — saves battery */
-  .sidebar, [class*="sidebar"], nav[class*="side"] {
-    background: #000 !important;
+  nav, aside { background: #000 !important; }
+}
+
+/* ── LOGIN SCREEN ──────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  /* OTP input boxes */
+  input[maxLength="1"] {
+    width: 44px !important;
+    height: 52px !important;
+    font-size: 22px !important;
   }
 }

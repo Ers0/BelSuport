@@ -68,11 +68,25 @@ mountRoute('/api/equipment',     () => require('../routes/equipment'));
 mountRoute('/api/analysis',      () => require('../routes/analysis'));
 mountRoute('/api/knowledge',     () => require('../routes/knowledge'));
 mountRoute('/api/ai-obs',        () => require('../routes/ai-obs'));
+mountRoute('/api/phone-auth',     () => require('../routes/phone-auth'));
+mountRoute('/api/janitor',        () => require('../routes/janitor-routes'));
 mountRoute('/api/contacts',      () => require('../routes/contacts'));
 
 // Files disabled in cloud
+app.use('/api/files/events', (req, res) => {
+  // Return a proper SSE stream that closes immediately — stops browser error logs
+  res.set({
+    'Content-Type':  'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection':    'close',
+    'X-Cloud-Mode':  'true',
+  });
+  res.write('data: {"type":"cloud_mode"}\n\n');
+  res.end();
+});
+
 app.use('/api/files', (req, res) =>
-  res.status(503).json({ error: 'Nao disponivel no modo cloud', cloud_mode: true })
+  res.status(200).json({ cloud_mode: true, organized: [], pending: [], message: 'Nao disponivel no modo cloud' })
 );
 
 app.use((req, res) => res.status(404).json({ error: 'Rota nao encontrada' }));

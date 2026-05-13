@@ -487,10 +487,15 @@ export function Jira({ showToast }) {
     testConn();
   }, []);
 
-  async function testConn() {
+  async function testConn(force = false) {
+    // Only test if Jira is configured (has a URL in settings) or explicitly requested
+    if (!force) {
+      const cfg = await api('/api/settings').catch(() => null);
+      if (!cfg?.jiraUrl && !cfg?.jiraHost) return; // skip if not configured
+    }
     try {
       const r = await api('/api/jira/test');
-      setStatus(r.success ? `✅ Conectado como ${r.user}` : `❌ ${r.error}`);
+      setStatus(r?.success ? '✅ Conectado como ' + r.user : '❌ ' + (r?.error || 'Erro'));
     } catch(e) { setStatus('❌ ' + e.message); }
   }
 
@@ -1040,7 +1045,11 @@ function ApprovalManager({ user, showToast }) {
   const [newEmail,     setNewEmail]     = useState('');
   const [newRoleId,    setNewRoleId]    = useState('3');
   const [adding,       setAdding]       = useState(false);
-  const [tab,          setTab]          = useState('pending'); // 'pending' | 'approved'
+  const [tab,          setTab]          = useState('pending'); // 'pending' | 'approved' | 'phone'
+  const [phoneUsers,   setPhoneUsers]   = useState([]);
+  const [resetId,      setResetId]      = useState(null);
+  const [resetPw,      setResetPw]      = useState('');
+  const [resetting,    setResetting]    = useState(false);
 
   const isMaster = user?.role === 'master';
   const isAdmin  = user?.role === 'admin' || isMaster;
@@ -1053,6 +1062,7 @@ function ApprovalManager({ user, showToast }) {
   const load = useCallback(async () => {
     const [appr, reqs] = await Promise.all([
       api('/api/auth/approvals').catch(() => []),
+      api('/api/phone-auth/admin/users').catch(() => []),
       api('/api/auth/access-requests').catch(() => []),
     ]);
     setApprovals(Array.isArray(appr) ? appr : []);
@@ -1107,7 +1117,7 @@ function ApprovalManager({ user, showToast }) {
 
       {/* Tabs */}
       <div style={{ display:'flex', borderBottom:'1px solid var(--b1)' }}>
-        {[['pending','⏳ Solicitações'], ['approved','✅ Pré-aprovados']].map(([id, label]) => (
+        {[['pending','⏳ Solicitações'], ['approved','✅ Pré-aprovados'], ['phone','📱 Usuários Telefone']].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={{
             padding:'10px 20px', border:'none', background:'transparent', cursor:'pointer',
             fontFamily:'inherit', fontSize:13, fontWeight: tab===id ? 700 : 400,
@@ -1168,6 +1178,91 @@ function ApprovalManager({ user, showToast }) {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Phone users tab */}
+        {tab === 'phone' && (
+          <div>
+            <div style={{ fontSize:12, color:'var(--tm)', marginBottom:12 }}>
+              Usuários cadastrados via login de telefone. Aprovação e gestão de senhas.
+            </div>
+            {phoneUsers.length === 0 && (
+              <div style={{ textAlign:'center', color:'var(--tm)', padding:'40px 0', fontSize:13 }}>
+                Nenhum usuário telefone cadastrado ainda.
+              </div>
+            )}
+            {phoneUsers.map(u => (
+              <div key={u.id} style={{ background:'var(--s1)', border:'1px solid var(--b1)', borderRadius:'var(--rs)', padding:'14px 16px', marginBottom:8 }}>
+                <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:4 }}>
+                      <span style={{ fontWeight:700, fontSize:14 }}>{u.name}</span>
+                      {!u.approved && <span style={{ fontSize:10, background:'rgba(251,146,60,.15)', color:'var(--or)', padding:'2px 8px', borderRadius:999, fontWeight:700 }}>Pendente</span>}
+                      {u.approved && <span style={{ fontSize:10, background:'rgba(34,197,94,.15)', color:'var(--gr)', padding:'2px 8px', borderRadius:999, fontWeight:700 }}>✓ Aprovado</span>}
+                      {u.temp_password && <span style={{ fontSize:10, background:'rgba(239,68,68,.15)', color:'var(--re)', padding:'2px 8px', borderRadius:999, fontWeight:700 }}>🔐 Senha Temp</span>}
+                      {!u.phone_verified && <span style={{ fontSize:10, background:'rgba(107,114,128,.15)', color:'var(--tm)', padding:'2px 8px', borderRadius:999, fontWeight:700 }}>Sem verificação</span>}
+                    </div>
+                    <div style={{ fontSize:11, color:'var(--tm)', display:'flex', gap:12, flexWrap:'wrap' }}>
+                      <span>📞 {u.phone}</span>
+                      {u.email && <span>📧 {u.email}</span>}
+                      <span>👤 {u.role_name}</span>
+                      {u.last_login && <span>Último login: {new Date(u.last_login).toLocaleDateString('pt-BR')}</span>}
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', gap:6, flexShrink:0, flexWrap:'wrap' }}>
+                    {!u.approved && u.phone_verified && (
+                      <>
+                        <button onClick={() => approvePhoneUser(u.id, 'approve', 3)}
+                          style={{ padding:'6px 12px', background:'rgba(34,197,94,.15)', color:'var(--gr)', border:'1px solid rgba(34,197,94,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                          ✓ Aprovar
+                        </button>
+                        <button onClick={() => approvePhoneUser(u.id, 'reject')}
+                          style={{ padding:'6px 12px', background:'rgba(239,68,68,.1)', color:'var(--re)', border:'1px solid rgba(239,68,68,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                          ✕ Rejeitar
+                        </button>
+                      </>
+                    )}
+                    {u.approved && (
+                      <button onClick={() => setResetId(resetId===u.id ? null : u.id)}
+                        style={{ padding:'6px 12px', background:'rgba(96,165,250,.1)', color:'var(--bl)', border:'1px solid rgba(96,165,250,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                        🔐 Redefinir Senha
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Password reset form */}
+                {resetId === u.id && (
+                  <div style={{ marginTop:12, padding:'12px 14px', background:'var(--s2)', border:'1px solid var(--b2)', borderRadius:'var(--rs)' }}>
+                    <div style={{ fontSize:12, color:'var(--or)', fontWeight:700, marginBottom:8 }}>
+                      🔐 Definir senha temporária para {u.name.split(' ')[0]}
+                    </div>
+                    <div style={{ fontSize:11, color:'var(--tm)', marginBottom:8, lineHeight:1.5 }}>
+                      A senha temporária será enviada ao usuário por WhatsApp. Ele precisará criar uma nova senha no próximo login.
+                      <br/><b>Você não pode ver a senha atual — apenas substitui-la.</b>
+                    </div>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <input
+                        type="text"
+                        placeholder="Senha temporária (mín. 8 chars, letra + número)"
+                        value={resetPw}
+                        onChange={e => setResetPw(e.target.value)}
+                        style={{ flex:1, background:'var(--s3)', border:'1px solid var(--b2)', color:'var(--tx)', borderRadius:'var(--rs)', padding:'8px 10px', fontSize:13, fontFamily:'inherit', outline:'none' }}
+                      />
+                      <button onClick={() => resetPhonePassword(u.id)} disabled={resetting}
+                        style={{ padding:'8px 14px', background:'var(--or)', color:'#000', border:'none', borderRadius:'var(--rs)', fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap' }}>
+                        {resetting ? '⟳' : '✓ Aplicar'}
+                      </button>
+                      <button onClick={() => { setResetId(null); setResetPw(''); }}
+                        style={{ padding:'8px 10px', background:'var(--s3)', color:'var(--tm)', border:'1px solid var(--b2)', borderRadius:'var(--rs)', fontSize:12, cursor:'pointer', fontFamily:'inherit' }}>
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
 
@@ -1284,9 +1379,6 @@ export function Configuracoes({ showToast, user }) {
           </Field>
           <Field label="ID da pasta do Centro de Soluções" hint="Pasta dedicada para imagens e vídeos do Centro de Soluções. Deixe vazio para usar a pasta mestre.">
             <input value={cfg.solutionsDriveId||''} onChange={e=>set('solutionsDriveId',e.target.value)} placeholder="1abc...xyz (opcional)" />
-          </Field>
-          <Field label="ID da pasta de Manuais e Datasheets" hint="Estrutura: Deye/Inversor/Manual.pdf — usada pela IA como fallback quando não encontra solução indexada.">
-            <input value={cfg.manualsDriveId||''} onChange={e=>set('manualsDriveId',e.target.value)} placeholder="1abc...xyz (opcional)" />
           </Field>
           <div style={{ fontSize:12, color: cfg.has_drive_auth ? 'var(--gr)' : 'var(--tm)', marginBottom:8 }}>
             {cfg.has_drive_auth ? '✅ Drive autenticado' : '⚠️ Drive não autenticado'}

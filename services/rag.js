@@ -1,6 +1,13 @@
 'use strict';
 /**
- * services/rag.js — Belenergy Semantic Retrieval Pipeline (RAG v301)
+ * services/rag.js — Retrieval Augmented Generation Pipeline v303
+ *
+ * Hot Tier  (pgvector):   Primary search. Verified solutions with embeddings.
+ *                          Threshold: configurable, default 0.72
+ * Cold Tier (tsvector):   Fallback. Full-text search across all solutions.
+ *                          Triggered when Hot returns zero results.
+ * Janitor:                 Pre-processes all queries before embedding.
+ *                          Logs fallbacks to pending_curation for review.
  */
 
 const http = require('http');
@@ -8,227 +15,270 @@ const { supabaseAdmin } = require('./db');
 
 const OLLAMA_URL   = process.env.OLLAMA_URL  || 'http://localhost:11434';
 const EMBED_MODEL  = process.env.EMBED_MODEL || 'nomic-embed-text';
-const GROQ_MODEL   = 'llama-3.1-8b-instant';
+const IS_CLOUD     = process.env.CLOUD_MODE === 'true';
 const GROQ_URL     = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL   = 'llama-3.1-8b-instant';
+const GEMINI_EMBED = 'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent';
 
-const SIMILARITY_THRESHOLD = 0.30;
-const FALLBACK_THRESHOLD   = 0.45;
-const TOP_K      = 5;
-const CONTEXT_K  = 3;
-const MAX_SNIPPET = 600;
+// ── Thresholds ────────────────────────────────────────────────────────────────
+const HOT_THRESHOLD      = parseFloat(process.env.RAG_HOT_THRESHOLD  || '0.72'); // high-confidence
+const COLD_THRESHOLD     = parseFloat(process.env.RAG_COLD_THRESHOLD || '0.20'); // accept from cold tier
+const FALLBACK_THRESHOLD = parseFloat(process.env.RAG_FALLBACK_THRESHOLD || '0.25'); // below = no answer
+const TOP_K_RETRIEVE     = 7;   // retrieve more candidates
+const TOP_K_CONTEXT      = 3;   // inject top-3 into prompt (no context noise)
+const MAX_SNIPPET        = 800;
 
-// ── 1. EMBED ──────────────────────────────────────────────────────────────────
-async function embed(text) {
+// ── 1. Embeddings ─────────────────────────────────────────────────────────────
+async function embedGemini(text) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const res = await fetch(GEMINI_EMBED + '?key=' + key, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'models/text-embedding-004', content: { parts: [{ text: text.slice(0, 2000) }] } }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const v = data?.embedding?.values;
+    return v && v.length === 768 ? v : null;
+  } catch { return null; }
+}
+
+async function embedOllama(text) {
   const body = JSON.stringify({ model: EMBED_MODEL, prompt: text });
   return new Promise((resolve) => {
     const url = new URL('/api/embeddings', OLLAMA_URL);
     const req = http.request({
-      hostname: url.hostname,
-      port:     parseInt(url.port) || 11434,
-      path:     url.pathname,
-      method:   'POST',
-      headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      hostname: url.hostname, port: parseInt(url.port) || 11434,
+      path: url.pathname, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     }, (res) => {
       let raw = '';
-      res.on('data', c => { raw += c; });
-      res.on('end', () => {
-        try { resolve(JSON.parse(raw).embedding || null); }
-        catch { resolve(null); }
-      });
+      res.on('data', c => raw += c);
+      res.on('end', () => { try { resolve(JSON.parse(raw).embedding || null); } catch { resolve(null); } });
     });
-    req.setTimeout(30_000, () => { req.destroy(); resolve(null); });
+    req.setTimeout(20_000, () => { req.destroy(); resolve(null); });
     req.on('error', () => resolve(null));
-    req.write(body);
-    req.end();
+    req.write(body); req.end();
   });
 }
 
-// ── 2. RETRIEVE ───────────────────────────────────────────────────────────────
-async function retrieveChunks(queryEmbedding) {
+async function embed(text) {
+  if (IS_CLOUD) {
+    const v = await embedGemini(text);
+    return v || await embedOllama(text);
+  }
+  const v = await embedOllama(text);
+  return v || await embedGemini(text);
+}
+
+// ── 2. Hot Tier — pgvector ────────────────────────────────────────────────────
+async function hotSearch(queryEmbedding, opts) {
+  opts = opts || {};
+  const threshold = opts.threshold || HOT_THRESHOLD;
   if (!queryEmbedding) return [];
   try {
     const { data, error } = await supabaseAdmin.rpc('match_solutions', {
       query_embedding: queryEmbedding,
-      match_count:     TOP_K,
-      match_threshold: SIMILARITY_THRESHOLD,
+      match_count:     TOP_K_RETRIEVE,
+      match_threshold: COLD_THRESHOLD, // retrieve broadly, filter below
       filter_brand:    null,
       filter_tag:      null,
     });
-    if (error) { console.error('[RAG] RPC error:', error.message); return []; }
-    return (data || []).map(row => ({
-      id:         row.id,
-      title:      row.title,
-      content:    row.content,
-      brand:      row.brand,
-      tags:       row.tags || [],
-      similarity: row.similarity || 0,
+    if (error) { console.error('[RAG] Hot search error:', error.message); return []; }
+    return (data || []).map(r => ({
+      id: r.id, title: r.title, content: r.content,
+      brand: r.brand, tags: r.tags || [],
+      similarity: r.similarity || 0, source: 'hot',
     }));
-  } catch (err) {
-    console.error('[RAG] retrieve error:', err.message);
-    return [];
-  }
+  } catch (err) { console.error('[RAG] Hot search exception:', err.message); return []; }
 }
 
-// ── 3. FILTER + RANK ──────────────────────────────────────────────────────────
-function rankAndFilter(chunks, queryMeta) {
+// ── 3. Rank + filter ──────────────────────────────────────────────────────────
+function rankChunks(chunks, queryMeta) {
+  queryMeta = queryMeta || {};
   return chunks
-    .filter(c => c.similarity >= SIMILARITY_THRESHOLD)
+    .filter(c => c.similarity >= COLD_THRESHOLD)
     .map(c => {
       let boost = 0;
-      if (queryMeta.brand && c.brand &&
-          c.brand.toLowerCase() === queryMeta.brand.toLowerCase()) boost += 0.10;
+      const brand = (queryMeta.brand || '').toLowerCase();
+      if (brand && c.brand && c.brand.toLowerCase() === brand) boost += 0.15;
+      if (c.source === 'hot') boost += 0.05; // slight preference for hot tier
       return Object.assign({}, c, { score: Math.min(1, c.similarity + boost) });
     })
     .sort((a, b) => b.score - a.score)
-    .slice(0, CONTEXT_K);
+    .slice(0, TOP_K_CONTEXT);
 }
 
-// ── 4. AUGMENT ────────────────────────────────────────────────────────────────
+// ── 4. System prompt — grounded, cites sources ────────────────────────────────
 function buildSystemPrompt(chunks) {
   const today = new Date().toLocaleDateString('pt-BR');
-
-  // Format each solution as a clearly delimited block
-  const solutionBlocks = chunks.map((c, i) => {
-    const pct = Math.round((c.score || 0) * 100);
+  const blocks = chunks.map((c, i) => {
+    const tier   = c.source === 'hot' ? '🔥 HOT' : '❄️ COLD';
+    const pct    = Math.round((c.score || 0) * 100);
+    const snip   = (c.content || '').slice(0, MAX_SNIPPET);
     return [
-      `╔═ SOLUCAO ${i + 1} [relevancia: ${pct}%] ══════════════════`,
-      `Titulo: ${c.title}`,
+      `╔═ SOLUCAO ${i+1} [${tier} | relevancia: ${pct}%] ═══`,
+      `ID: ${c.id} | Titulo: "${c.title}"`,
       `Marca: ${c.brand || 'Geral'}`,
-      `──────────────────────────────────────────`,
-      `${c.content || '(sem conteudo)'}`,
-      `╚══════════════════════════════════════════`,
+      `─────────────────────────────────────────`,
+      snip,
+      `╚═══════════════════════════════════════`,
     ].join('\n');
   }).join('\n\n');
 
   return [
-    'Voce e um assistente tecnico da Belenergy. Data: ' + today,
-    '',
-    'INSTRUCAO PRINCIPAL:',
-    'Abaixo estao as UNICAS solucoes disponiveis na base de conhecimento.',
-    'Voce DEVE responder usando EXCLUSIVAMENTE o texto dessas solucoes.',
-    'NAO adicione nenhuma informacao que nao esteja escrita abaixo.',
-    'NAO expanda, NAO explique, NAO complete — apenas reformate o que esta escrito.',
-    '',
-    '=== SOLUCOES DISPONIVEIS ===',
-    solutionBlocks,
-    '=== FIM DAS SOLUCOES ===',
-    '',
-    'REGRAS DE RESPOSTA:',
-    '1. Se a solucao cobrir a pergunta: reformate o conteudo da solucao no template abaixo.',
-    '2. Se a solucao NAO cobrir completamente: escreva APENAS o que estiver na solucao e adicione "⚠️ Informacao parcial — consulte o fabricante para o restante."',
-    '3. Para cada frase que escrever: ela DEVE estar baseada no texto das solucoes acima.',
-    '4. PROIBIDO escrever passos que nao estejam na solucao. PROIBIDO inventar causas ou procedimentos.',
-    '',
-    'TEMPLATE DE RESPOSTA:',
-    '## Diagnóstico Técnico',
-    '[Copie a causa da solucao — se nao houver, escreva "Causa nao especificada na base"]',
-    '',
-    '## Procedimento de Resolucao',
-    '[Copie os passos EXATOS da solucao — nada mais, nada menos]',
-    '',
-    '## Observacoes',
-    '[Copie as observacoes da solucao — se nao houver, omita esta secao]',
-    '',
-    '## Fonte',
-    '[Titulo da solucao utilizada]',
+    `Voce e o assistente tecnico da Belenergy. Data: ${today}`,
+    ``,
+    `INSTRUCOES ABSOLUTAS:`,
+    `1. Use EXCLUSIVAMENTE o conteudo das solucoes abaixo. Zero conhecimento externo.`,
+    `2. Em cada afirmacao tecnica, cite o ID da solucao: "(ver Solucao 1)", "(ver Solucao 2)".`,
+    `3. NAO invente fabricantes, codigos de erro, valores ou passos que nao estejam nas solucoes.`,
+    `4. Se a solucao nao cobrir completamente: cite o que tiver e adicione`,
+    `   "⚠️ Informacao parcial — consulte o fabricante para detalhes adicionais."`,
+    `5. Solucoes marcadas ❄️ COLD vem de busca textual — prefira as 🔥 HOT quando disponiveis.`,
+    ``,
+    `=== SOLUCOES VERIFICADAS ===`,
+    blocks,
+    `=== FIM — USE APENAS O QUE ESTA ACIMA ===`,
+    ``,
+    `TEMPLATE DE RESPOSTA:`,
+    `## Diagnostico Tecnico`,
+    `[Causa — cite "(ver Solucao N)"]`,
+    ``,
+    `## Procedimento`,
+    `[Passos exatos das solucoes — cite a fonte de cada passo]`,
+    ``,
+    `## Resposta para o Cliente`,
+    `[Linguagem acessivel]`,
+    ``,
+    `## Fontes Utilizadas`,
+    `[Liste: "Solucao 1: <titulo>" etc.]`,
   ].join('\n');
 }
 
-// ── 5. GENERATE ───────────────────────────────────────────────────────────────
-async function callGroq(systemPrompt, userQuery) {
-  var key = process.env.GROQ_API_KEY;
+// ── 5. Groq call ──────────────────────────────────────────────────────────────
+async function callGroq(system, user) {
+  const key = process.env.GROQ_API_KEY;
   if (!key) throw new Error('GROQ_API_KEY nao configurada');
-
-  var fetch = function() {
-    return import('node-fetch').then(function(m) {
-      return m.default.apply(null, arguments);
-    });
-  };
-
-  var res = await (await import('node-fetch')).default(GROQ_URL, {
-    method:  'POST',
+  const fetch = (await import('node-fetch')).default;
+  const res = await fetch(GROQ_URL, {
+    method: 'POST',
     headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model:       GROQ_MODEL,
-      max_tokens:  1200,
-      temperature: 0.2,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userQuery },
-      ],
+      model: GROQ_MODEL, max_tokens: 1400, temperature: 0.1,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
     }),
+    signal: AbortSignal.timeout(25_000),
   });
-
-  if (!res.ok) {
-    var txt = await res.text();
-    throw new Error('Groq ' + res.status + ': ' + txt.slice(0, 200));
-  }
-
-  var data = await res.json();
-  return {
-    text:       (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '',
-    tokensUsed: (data.usage && data.usage.total_tokens) || 0,
-  };
+  if (!res.ok) { const t = await res.text(); throw new Error('Groq ' + res.status + ': ' + t.slice(0, 150)); }
+  const data = await res.json();
+  return { text: data.choices?.[0]?.message?.content || '', tokens: data.usage?.total_tokens || 0 };
 }
 
-// ── ragQuery ──────────────────────────────────────────────────────────────────
-async function ragQuery(query, opts) {
+// ── MAIN: ragQuery ────────────────────────────────────────────────────────────
+async function ragQuery(rawQuery, opts) {
   opts = opts || {};
-  var t0 = Date.now();
+  const t0 = Date.now();
 
-  var vec = await embed(query);
-  var rawChunks = vec ? await retrieveChunks(vec) : [];
-  var queryMeta = { brand: opts.brand || opts.fabricante || '' };
-  var topChunks = rankAndFilter(rawChunks, queryMeta);
-  var topScore  = topChunks.length > 0 ? topChunks[0].score : 0;
-  var isFallback = topChunks.length === 0 || topScore < FALLBACK_THRESHOLD;
+  // ── Step 1: Pre-process via Janitor ──────────────────────────────────────
+  const janitor = require('./janitor');
+  const queryInfo = await janitor.preprocessQuery(rawQuery, { brand: opts.brand || opts.fabricante });
+  const searchQuery = queryInfo.expanded || queryInfo.normalized || rawQuery;
+  const brand       = queryInfo.brand || opts.brand || opts.fabricante || '';
 
-  var answer, tokensUsed = 0;
+  if (searchQuery !== rawQuery) {
+    console.log('[RAG] Pre-processed:', JSON.stringify(rawQuery.slice(0, 60)), '→', JSON.stringify(searchQuery.slice(0, 60)));
+  }
+
+  // ── Step 2: Embed ─────────────────────────────────────────────────────────
+  const vec = await embed(searchQuery);
+  if (!vec) console.warn('[RAG] Embedding failed — both Gemini and Ollama offline');
+
+  // ── Step 3: Hot tier search ───────────────────────────────────────────────
+  const hotChunks = vec ? await hotSearch(vec) : [];
+  const hotAboveThreshold = hotChunks.filter(c => c.similarity >= HOT_THRESHOLD);
+
+  let allChunks  = hotChunks;
+  let usedCold   = false;
+
+  // ── Step 4: Cold tier fallback ────────────────────────────────────────────
+  if (hotAboveThreshold.length === 0) {
+    console.log('[RAG] Hot tier below threshold — trying cold (FTS)');
+    const cold = await janitor.coldSearch(searchQuery, { topK: TOP_K_RETRIEVE, brand: brand || null });
+    if (cold.chunks.length > 0) {
+      allChunks = hotChunks.concat(cold.chunks); // merge hot + cold
+      usedCold  = true;
+    }
+  }
+
+  // ── Step 5: Rank ──────────────────────────────────────────────────────────
+  const topChunks = rankChunks(allChunks, { brand });
+  const topScore  = topChunks.length > 0 ? topChunks[0].score : 0;
+  const isFallback = !vec || topChunks.length === 0 || topScore < FALLBACK_THRESHOLD;
+
+  console.log(
+    '[RAG]', Date.now() - t0 + 'ms |',
+    'hot=' + hotChunks.length, 'cold=' + (usedCold ? 'yes' : 'no'),
+    'top=' + topChunks.length, 'score=' + topScore.toFixed(2),
+    'fallback=' + isFallback
+  );
+
+  // ── Step 6: Log fallback for curation ────────────────────────────────────
+  if (isFallback) {
+    await janitor.logFallback(
+      { original: rawQuery, expanded: searchQuery, brand },
+      { topScore, source: opts.source || 'rag', userId: opts.userId }
+    );
+  }
+
+  // ── Step 7: Generate ──────────────────────────────────────────────────────
+  let answer, tokensUsed = 0;
 
   if (isFallback) {
-    var brand = opts.brand || opts.fabricante || '';
-    var fallbackLines = [
-      '## Nenhuma solucao verificada encontrada',
+    answer = [
+      '## Nenhuma solução verificada encontrada',
       '',
       brand
-        ? 'Nao ha solucoes indexadas para **' + brand + '** com relevancia suficiente.'
-        : 'Nao ha solucoes indexadas com relevancia suficiente para esta consulta.',
+        ? `Sem soluções indexadas para **${brand}** com relevância suficiente.`
+        : 'Sem soluções indexadas com relevância suficiente.',
       '',
-      '**O que fazer:**',
-      '- Verifique se ha solucoes no Centro de Solucoes para este fabricante.',
-      '- Use **Reindexar** (admin) para gerar embeddings das solucoes existentes.',
-      '- Adicione uma nova solucao tecnica para este problema.',
+      '**Para resolver:**',
+      '- Verifique o Centro de Soluções para este equipamento.',
+      '- Execute **Reindexar** no painel AI Obs.',
+      '- Sua consulta foi salva em **Curadoria Pendente** para análise.',
       '',
-      '_Resposta nao gerada por IA para evitar informacoes incorretas._',
-    ];
-    answer = fallbackLines.join('\n');
-    console.log('[RAG] fallback — score=' + topScore.toFixed(2) + ' chunks=' + topChunks.length);
+      '_Resposta não gerada por IA — consulta registrada para revisão._',
+    ].join('\n');
   } else {
-    var systemPrompt = buildSystemPrompt(topChunks);
-    var result = await callGroq(systemPrompt, query);
-    answer     = result.text;
-    tokensUsed = result.tokensUsed;
+    const systemPrompt = buildSystemPrompt(topChunks);
+    try {
+      const result = await callGroq(systemPrompt, searchQuery);
+      answer     = result.text;
+      tokensUsed = result.tokens;
+    } catch (err) {
+      console.error('[RAG] Groq error:', err.message);
+      throw err;
+    }
   }
 
-  var elapsed = Date.now() - t0;
-  console.log('[RAG] ' + elapsed + 'ms | chunks=' + topChunks.length + ' score=' + topScore.toFixed(2) + ' tokens=' + tokensUsed + ' fallback=' + isFallback);
-
   return {
-    answer:     answer,
-    sources:    topChunks.map(function(c) {
-      return { id: c.id, title: c.title, brand: c.brand, score: parseFloat(c.score.toFixed(3)) };
-    }),
-    fallback:   isFallback,
-    similarity: topScore,
-    tokensUsed: tokensUsed,
-    elapsedMs:  elapsed,
+    answer,
+    sources:       topChunks.map(c => ({ id: c.id, title: c.title, brand: c.brand, score: parseFloat(c.score.toFixed(3)), tier: c.source })),
+    fallback:      isFallback,
+    similarity:    topScore,
+    usedColdTier:  usedCold,
+    tokensUsed,
+    elapsedMs:     Date.now() - t0,
+    queryExpanded: searchQuery !== rawQuery ? searchQuery : undefined,
   };
 }
 
-// ── buildQuery ────────────────────────────────────────────────────────────────
 function buildQuery(ticketData) {
   ticketData = ticketData || {};
-  var parts = [];
+  const parts = [];
   if (ticketData.relato)      parts.push('Problema: ' + ticketData.relato);
   if (ticketData.fabricante)  parts.push('Fabricante: ' + ticketData.fabricante);
   if (ticketData.modelo)      parts.push('Modelo: ' + ticketData.modelo);
@@ -240,4 +290,4 @@ function buildQuery(ticketData) {
   return parts.join('. ');
 }
 
-module.exports = { ragQuery, buildQuery, embed, SIMILARITY_THRESHOLD, FALLBACK_THRESHOLD };
+module.exports = { ragQuery, buildQuery, embed, HOT_THRESHOLD, FALLBACK_THRESHOLD };

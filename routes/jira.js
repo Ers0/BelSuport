@@ -121,7 +121,13 @@ router.get('/test', async (req, res) => {
       email: cfg.email 
     });
   } catch (err) {
-    res.status(400).json({ success: false, error: err.message });
+    // Return 200 (not 400) so browser doesn't log it as error when Jira isn't configured
+    const isUnconfigured = err.message?.includes('não configurad') || err.message?.includes('not configured') || err.message?.includes('config');
+    res.status(200).json({
+      success: false,
+      error:   err.message,
+      configured: !isUnconfigured,
+    });
   }
 });
 
@@ -528,13 +534,6 @@ router.get('/poll', async (req, res) => {
         const client = c.integrador || c.cliente_final || '';
         const title  = `Jira: ${c.jira_key} → ${jiraStatus}`;
         const body   = `${client}${c.sn ? ` | S/N: ${c.sn}` : ''}`;
-
-        // Remove old notifications for this jira_key to avoid duplicates
-        await supabaseAdmin.from('notifications')
-          .delete()
-          .eq('user_id', userId)
-          .eq('type', 'jira_transition')
-          .filter('metadata->issueKey', 'eq', `"${c.jira_key}"`);
 
         // Save notification
         await supabaseAdmin.from('notifications').insert([{

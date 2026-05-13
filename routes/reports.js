@@ -2,15 +2,6 @@
 const express = require('express');
 const router  = express.Router();
 const { supabaseAdmin } = require('../services/db');
-
-// Graceful crypto for reports — decrypt before rendering
-let _crypto = null;
-try { _crypto = require('../services/crypto'); } catch (_) {}
-const masterKey = () => _crypto ? _crypto.getMasterKey() : null;
-const dec = (obj, fields) => _crypto && obj ? _crypto.decryptFields(obj, fields, masterKey()) : (obj || {});
-const decRows = (rows, fields) => _crypto && rows ? _crypto.decryptRows(rows, fields, masterKey()) : (rows || []);
-const EF_CASE = _crypto?.ENCRYPTED_FIELDS?.chamados || [];
-const EF_REM  = _crypto?.ENCRYPTED_FIELDS?.reminders || [];
 const { requirePermission } = require('../services/permissions');
 
 // Helper: check pdf_export_enabled toggle + permission
@@ -30,10 +21,9 @@ router.use(guardExport);
 // ── GET /api/reports/case/:id — HTML report (print to PDF via browser) ─────────
 router.get('/case/:id', async (req, res) => {
   try {
-    const { data: cRaw, error } = await supabaseAdmin
+    const { data: c, error } = await supabaseAdmin
       .from('chamados').select('*').eq('id', req.params.id).single();
     if (error) throw error;
-    const c = dec(cRaw, EF_CASE);
 
     const { data: events } = await supabaseAdmin
       .from('case_events').select('*')
@@ -488,10 +478,9 @@ router.get('/case/:id', async (req, res) => {
 // ── GET /api/reports/reminder/:id — HTML contact report ──────────────────────
 router.get('/reminder/:id', async (req, res) => {
   try {
-    const { data: rRaw, error } = await supabaseAdmin
+    const { data: r, error } = await supabaseAdmin
       .from('reminders').select('*').eq('id', req.params.id).single();
     if (error) throw error;
-    const r = dec(rRaw, EF_REM);
 
     const statusLabel = { pending:'Pendente', contacted:'Contactado', done:'Concluído' }[r.status] || r.status;
     const statusColor = { pending:'#d97706', contacted:'#2563eb', done:'#16a34a' }[r.status] || '#6b7280';
@@ -766,13 +755,28 @@ router.get('/dashboard', async (req, res) => {
     if (period === 'weekly')  fromDate.setDate(now.getDate() - 7);
     if (period === 'monthly') fromDate.setDate(now.getDate() - 30);
 
-    const { data: casesRaw } = await supabaseAdmin
+    // Fetch all cases — chamados uses 'data' not 'created_at'
+    const { data: allChamados, error: chamErr } = await supabaseAdmin
       .from('chamados')
-      .select('id,data,hora,status,fabricante,sn,integrador,cliente_final,nome,adb_number,created_at')
-      .gte('created_at', fromDate.toISOString())
-      .order('created_at', { ascending: false });
+      .select('id,data,hora,status,fabricante,sn,integrador,cliente_final,nome,adb_number')
+      .order('id', { ascending: false })
+      .limit(2000);
 
-    const all     = cases || [];
+    if (chamErr) throw chamErr;
+
+    // Filter by period using the 'data' column (DD/MM/YYYY format)
+    const fromStr = fromDate.toLocaleDateString('pt-BR');
+    const cases = (allChamados || []).filter(c => {
+      if (!c.data) return true; // include if no date
+      try {
+        // Parse DD/MM/YYYY
+        const [d, m, y] = (c.data || '').split('/');
+        if (!d || !m || !y) return true;
+        return new Date(+y, +m - 1, +d) >= fromDate;
+      } catch { return true; }
+    });
+
+    const all = cases;
     const total   = all.length;
     const done    = all.filter(c => c.status === 'Concluído').length;
     const pending = all.filter(c => c.status === 'Pendente Itens').length;
