@@ -80,10 +80,15 @@ function FeedbackBar({ result, query, onFeedback }) {
           note:       note || null,
         }),
       });
-      setVoted(helpful ? 'up' : 'down');
-      if (!helpful) setShowNote(true);
-      onFeedback?.(helpful);
-    } finally { setSending(false); }
+    } catch (e) {
+      console.warn('[Feedback] API error:', e.message);
+      // Don't block UI — feedback is best-effort
+    } finally {
+      setSending(false);
+    }
+    setVoted(helpful ? 'up' : 'down');
+    if (!helpful) setShowNote(true);
+    onFeedback?.(helpful);
   }
 
   return (

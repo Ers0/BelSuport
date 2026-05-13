@@ -107,25 +107,20 @@ async function sendOTPEmail(email, otp, name) {
   try {
     const { sendEmail } = require('./sheets');
     const firstName = (name || '').split(' ')[0] || 'Técnico';
+    // Plain, simple HTML — avoids render issues in some email clients
     await sendEmail({
       to:      email,
-      subject: `${otp} — Seu código de acesso Belenergy`,
-      html: `
-        <div style="font-family:sans-serif;max-width:420px;margin:0 auto;padding:32px 24px;background:#0C0E16;border-radius:16px;color:#EEF0F8">
-          <div style="text-align:center;margin-bottom:28px">
-            <div style="display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;background:linear-gradient(135deg,#FFD700,#FF8C00);border-radius:16px;font-size:26px">⚡</div>
-            <div style="font-size:18px;font-weight:800;margin-top:12px">Belenergy Support Pro</div>
-          </div>
-          <p style="color:#C4C9DC;margin-bottom:8px">Olá, ${firstName}!</p>
-          <p style="color:#C4C9DC;margin-bottom:24px">Seu código de verificação é:</p>
-          <div style="text-align:center;margin:24px 0">
-            <span style="font-size:42px;font-weight:900;letter-spacing:10px;color:#FFD700">${otp}</span>
-          </div>
-          <p style="color:#6B7694;font-size:13px;text-align:center">Válido por 5 minutos. Não compartilhe este código.</p>
-          <hr style="border:none;border-top:1px solid #1C1F2E;margin:24px 0"/>
-          <p style="color:#6B7694;font-size:11px;text-align:center">Se você não solicitou este código, ignore este email.</p>
-        </div>
-      `,
+      subject: otp + ' — Código de verificação Belenergy Support Pro',
+      html: '<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:24px">'
+        + '<h2 style="color:#333">Belenergy Support Pro</h2>'
+        + '<p>Olá, ' + firstName + '!</p>'
+        + '<p>Seu código de verificação:</p>'
+        + '<div style="text-align:center;padding:20px;background:#f5f5f5;border-radius:8px;margin:20px 0">'
+        + '<span style="font-size:40px;font-weight:bold;letter-spacing:12px;color:#333;font-family:monospace">' + otp + '</span>'
+        + '</div>'
+        + '<p style="color:#666;font-size:13px">Válido por 5 minutos. Não compartilhe este código.</p>'
+        + '<p style="color:#999;font-size:11px">Se você não solicitou este código, ignore este email.</p>'
+        + '</div>',
     });
     return true;
   } catch (err) {
@@ -227,34 +222,17 @@ router.post('/register', async (req, res) => {
       expires_at: expires.toISOString(),
     }]);
 
-    // Send OTP via existing email sender
-    try {
-      const { sendEmail } = require('./sheets');
-      const first = name.split(' ')[0];
-      await sendEmail({
-        to:      email,
-        subject: `${otp} — Código de verificação Belenergy`,
-        html: `
-          <div style="font-family:sans-serif;max-width:440px;margin:0 auto;padding:32px 24px;background:#0C0E16;border-radius:16px;color:#EEF0F8">
-            <div style="text-align:center;margin-bottom:24px">
-              <div style="display:inline-block;background:linear-gradient(135deg,#FFD700,#FF8C00);width:56px;height:56px;border-radius:16px;line-height:56px;font-size:28px">⚡</div>
-              <h2 style="color:#FFD700;margin:12px 0 4px">Belenergy Support Pro</h2>
-            </div>
-            <p style="color:#C4C9DC">Olá, <b>${first}</b>!</p>
-            <p style="color:#C4C9DC;line-height:1.6">Use o código abaixo para verificar seu email e continuar o cadastro:</p>
-            <div style="text-align:center;margin:28px 0;padding:20px;background:#1C1F2E;border-radius:12px;border:1px solid #2A2F45">
-              <span style="font-size:44px;font-weight:900;letter-spacing:14px;color:#FFD700;font-family:monospace">${otp}</span>
-            </div>
-            <p style="color:#6B7694;font-size:13px;text-align:center">⏱ Válido por <b>5 minutos</b>. Não compartilhe este código.</p>
-            <hr style="border:none;border-top:1px solid #1C1F2E;margin:20px 0"/>
-            <p style="color:#6B7694;font-size:11px;text-align:center">Se você não solicitou este código, ignore este email.</p>
-          </div>`,
+    // Send OTP email — fail loudly so config errors surface to the user
+    const emailSent = await sendOTPEmail(email, otp, name);
+    if (!emailSent) {
+      // Email failed — delete the OTP record so user can try again
+      await supabaseAdmin.from('phone_auth_requests').delete()
+        .eq('phone', 'email:' + email.toLowerCase()).eq('used', false).catch(() => {});
+      return res.status(500).json({
+        error: 'Falha ao enviar o código por email. Verifique se GMAIL_USER e GMAIL_APP_PASSWORD estão configurados no servidor.',
       });
-      console.log('[PhoneAuth] OTP sent to', email);
-    } catch (emailErr) {
-      console.error('[PhoneAuth] Email send failed:', emailErr.message);
-      // Don't block registration if email fails — log and continue
     }
+    console.log('[PhoneAuth] OTP sent to', email);
 
     return res.json({
       success:            true,
@@ -447,10 +425,20 @@ router.post('/send-otp', async (req, res) => {
 
     const otp = generateOTP();
     await supabaseAdmin.from('phone_auth_requests').insert([{
-      phone, otp_hash: hashOTP(otp), expires_at: new Date(Date.now() + 5*60_000).toISOString(),
+      phone: 'email:' + (pu.email || '').toLowerCase(),
+      email: pu.email || null,
+      name:  pu.name  || null,
+      otp_hash: hashOTP(otp),
+      expires_at: new Date(Date.now() + 5*60_000).toISOString(),
     }]);
-    const via = await sendOTP(phone, otp, (pu.name || '').split(' ')[0]);
-    return res.json({ success: true, via, phone: phone.slice(0,-4) + '****', expiresIn: 300 });
+
+    // Pass email as 4th arg so sendOTP uses email (not WhatsApp)
+    const emailSent = pu.email ? await sendOTPEmail(pu.email, otp, pu.name) : false;
+    if (!emailSent) {
+      return res.status(500).json({ error: 'Falha ao enviar email. Verifique a configuração do Gmail no servidor.' });
+    }
+    const masked = (pu.email || '').replace(/(.{2})(.*)(@.*)/, '$1***$3');
+    return res.json({ success: true, via: 'email', maskedEmail: masked, expiresIn: 300 });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

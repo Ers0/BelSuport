@@ -409,15 +409,22 @@ router.post('/feedback', async (req, res) => {
       ? crypto.createHash('sha256').update(answer.slice(0, 500)).digest('hex')
       : null;
 
-    await supabaseAdmin.from('ai_feedback').insert([{
+    // sources is JSONB — pass as object directly, NOT JSON.stringify
+    const { error: fbErr } = await supabaseAdmin.from('ai_feedback').insert([{
       query:       query   || '',
       answer_hash: answerHash,
       helpful:     Boolean(helpful),
-      sources:     sources ? JSON.stringify(sources) : null,
+      sources:     sources || null,
       similarity:  similarity || null,
       user_id:     req.user?.id || null,
       note:        note || null,
     }]);
+
+    if (fbErr) {
+      // Table might not exist yet — return success anyway so UI doesn't break
+      console.warn('[Feedback] Insert failed (run migration_ai_feedback.sql):', fbErr.message);
+      return res.json({ success: true, warning: 'Feedback not saved: ' + fbErr.message });
+    }
 
     // Thumbs down → also log to pending_curation for review
     if (!helpful) {
