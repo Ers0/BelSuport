@@ -226,8 +226,10 @@ router.post('/register', async (req, res) => {
     const emailSent = await sendOTPEmail(email, otp, name);
     if (!emailSent) {
       // Email failed — delete the OTP record so user can try again
-      await supabaseAdmin.from('phone_auth_requests').delete()
-        .eq('phone', 'email:' + email.toLowerCase()).eq('used', false).catch(() => {});
+      try {
+        await supabaseAdmin.from('phone_auth_requests').delete()
+          .eq('phone', 'email:' + email.toLowerCase()).eq('used', false);
+      } catch (_) {}
       return res.status(500).json({
         error: 'Falha ao enviar o código por email. Verifique se GMAIL_USER e GMAIL_APP_PASSWORD estão configurados no servidor.',
       });
