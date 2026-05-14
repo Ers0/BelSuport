@@ -127,9 +127,13 @@ async function sendOTPEmail(email, otp, name) {
       body:    JSON.stringify({ from, to: [email], subject, html }),
       signal:  AbortSignal.timeout(10_000),
     });
-    if (res.ok) { console.log('[OTP] Sent via Resend to', email); return true; }
-    const err = await res.json().catch(() => ({}));
-    console.warn('[OTP] Resend failed:', err?.message || res.status, '— trying fallback');
+    const resBody = await res.json().catch(() => ({}));
+    if (res.ok) {
+      console.log('[OTP] Sent via Resend to', email, '| id:', resBody?.id);
+      return true;
+    }
+    console.warn('[OTP] Resend failed:', res.status, JSON.stringify(resBody));
+    throw new Error('Resend error ' + res.status + ': ' + (resBody?.message || resBody?.name || JSON.stringify(resBody)));
   }
 
   // 2. sheets.js sendEmail (existing Gmail / SMTP config)

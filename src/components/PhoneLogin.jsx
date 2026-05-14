@@ -143,22 +143,31 @@ export default function PhoneLogin({ onSuccess, onBack }) {
 
   async function doRegister() {
     if (!rName || !rPw || !rEmail) { setError('Preencha nome, email e senha'); return; }
-    if (!rEmail.includes('@'))       { setError('Email inválido'); return; }
-    if (rPw !== rPwC)                { setError('As senhas não coincidem'); return; }
-    if (rPw.length < 8)              { setError('Senha deve ter pelo menos 8 caracteres'); return; }
+    if (!rEmail.includes('@'))     { setError('Email inválido'); return; }
+    if (rPw !== rPwC)              { setError('As senhas não coincidem'); return; }
+    if (rPw.length < 8)            { setError('Senha deve ter pelo menos 8 caracteres'); return; }
     if (!/[0-9]/.test(rPw) || !/[a-zA-Z]/.test(rPw)) { setError('Senha precisa ter letras e números'); return; }
     setLoad(true); setError('');
+
     const d = await apiPost('/api/phone-auth/register', {
       name: rName, email: rEmail, phone: rPhone || null, password: rPw,
-    }).catch(e => ({ error: e.message }));
+    }).catch(e => ({ error: e.message, ok: false }));
     setLoad(false);
+
+    // ✅ Only go to OTP step when server confirms the code was sent
+    if (d.ok === true && d.pendingVerification === true) {
+      setMasked(d.maskedEmail || rEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3'));
+      setCd(d.expiresIn || 300);
+      setOtp(['','','','','','']);
+      setStep('otp');
+      return;
+    }
+
+    // Already waiting for approval
     if (d.pending) { setStep('pending'); return; }
-    if (d.error)   { setError(d.error); return; }
-    // OTP sent to email — go to verification step
-    setMasked(d.maskedEmail || rEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3'));
-    setCd(d.expiresIn || 300);
-    setOtp(['','','','','','']);
-    setStep('otp');
+
+    // Error — show it
+    setError(d.error || ('Resposta inesperada do servidor: ' + JSON.stringify(d)));
   }
 
   async function doVerifyOtp(code) {
