@@ -44,17 +44,8 @@ function verifyPassword(password, salt, hash) {
 }
 
 // ── OTP helpers ───────────────────────────────────────────────────────────────
-function generateOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
-function hashOTP(otp)  { return crypto.createHash('sha256').update(otp).digest('hex'); }
-
-function normalizePhone(raw) {
-  let phone = (raw || '').replace(/\D/g, '');
-  if (phone.startsWith('0')) phone = phone.slice(1);
-  if (!phone.startsWith('55') && phone.length <= 11) phone = '55' + phone;
-  if (!phone.startsWith('+')) phone = '+' + phone;
   if (phone.length < 12 || phone.length > 15) throw new Error('Número de telefone inválido');
   return phone;
-}
 
 // ── OTP sender ────────────────────────────────────────────────────────────────
 /**
@@ -103,66 +94,30 @@ async function sendWhatsAppMeta(phone, message) {
  * No external service needed. Works with Gmail OAuth2 or any SMTP already configured.
  */
 async function sendOTPEmail(email, otp, name) {
-  if (!email) throw new Error('Email não fornecido');
-
-  const firstName = (name || '').split(' ')[0] || 'Técnico';
-  const html = '<div style="font-family:Arial,sans-serif;padding:24px;max-width:400px">'
-    + '<h2 style="color:#333">Belenergy Support Pro</h2>'
-    + '<p>Olá, ' + firstName + '!</p>'
-    + '<p>Seu código de verificação:</p>'
-    + '<div style="font-size:36px;font-weight:bold;letter-spacing:10px;background:#f5f5f5;padding:16px;text-align:center;border-radius:8px;margin:16px 0">'
-    + otp
-    + '</div>'
-    + '<p style="color:#666;font-size:12px">Válido por 5 minutos. Não compartilhe.</p>'
-    + '</div>';
-  const subject = otp + ' — Código de verificação Belenergy';
-
-  // 1. Resend.com (preferred — free 3k/month, no Gmail needed)
-  if (process.env.RESEND_API_KEY) {
-    const fetch = (await import('node-fetch')).default;
-    const from  = process.env.RESEND_FROM || 'Belenergy Support Pro <noreply@' + (process.env.RESEND_DOMAIN || 'belenergy.com.br') + '>';
-    const res   = await fetch('https://api.resend.com/emails', {
-      method:  'POST',
-      headers: { 'Authorization': 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ from, to: [email], subject, html }),
-      signal:  AbortSignal.timeout(10_000),
-    });
-    const resBody = await res.json().catch(() => ({}));
-    if (res.ok) {
-      console.log('[OTP] Sent via Resend to', email, '| id:', resBody?.id);
-      return true;
-    }
-    console.warn('[OTP] Resend failed:', res.status, JSON.stringify(resBody));
-    throw new Error('Resend error ' + res.status + ': ' + (resBody?.message || resBody?.name || JSON.stringify(resBody)));
-  }
-
-  // 2. sheets.js sendEmail (existing Gmail / SMTP config)
+  if (!email) return false;
   try {
-    const mod = require('./sheets');
-    if (typeof mod.sendEmail === 'function') {
-      await mod.sendEmail({ to: email, subject, html });
-      console.log('[OTP] Sent via sheets.sendEmail to', email);
-      return true;
-    }
-  } catch (e) {
-    console.warn('[OTP] sheets.sendEmail failed:', e.message);
-  }
-
-  // 3. Direct nodemailer SMTP fallback
-  const user = process.env.GMAIL_USER;
-  const pass = (process.env.GMAIL_APP_PASSWORD || '').replace(/\s/g, '');
-  if (user && pass) {
-    const nodemailer = require('nodemailer');
-    const t = nodemailer.createTransport({
-      host: 'smtp.gmail.com', port: 587, secure: false, requireTLS: true,
-      auth: { user, pass },
+    const { sendEmail } = require('./sheets');
+    const firstName = (name || '').split(' ')[0] || 'Técnico';
+    // Plain, simple HTML — avoids render issues in some email clients
+    await sendEmail({
+      to:      email,
+      subject: otp + ' — Código de verificação Belenergy Support Pro',
+      html: '<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:24px">'
+        + '<h2 style="color:#333">Belenergy Support Pro</h2>'
+        + '<p>Olá, ' + firstName + '!</p>'
+        + '<p>Seu código de verificação:</p>'
+        + '<div style="text-align:center;padding:20px;background:#f5f5f5;border-radius:8px;margin:20px 0">'
+        + '<span style="font-size:40px;font-weight:bold;letter-spacing:12px;color:#333;font-family:monospace">' + otp + '</span>'
+        + '</div>'
+        + '<p style="color:#666;font-size:13px">Válido por 5 minutos. Não compartilhe este código.</p>'
+        + '<p style="color:#999;font-size:11px">Se você não solicitou este código, ignore este email.</p>'
+        + '</div>',
     });
-    await t.sendMail({ from: '"Belenergy" <' + user + '>', to: email, subject, html });
-    console.log('[OTP] Sent via direct SMTP to', email);
     return true;
+  } catch (err) {
+    console.error('[OTP Email] Failed:', err.message);
+    return false;
   }
-
-  throw new Error('Nenhum provedor de email configurado. Defina RESEND_API_KEY ou GMAIL_USER + GMAIL_APP_PASSWORD no .env');
 }
 
 async function sendOTP(phone, otp, name, email) {
@@ -218,21 +173,18 @@ router.post('/register', async (req, res) => {
     const pwErr = validatePassword(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    // Check if already registered
+    // Check if already registered and approved
     const { data: existing } = await supabaseAdmin
       .from('phone_users').select('id, approved, phone_verified').ilike('email', email).maybeSingle();
 
     if (existing?.approved) {
       return res.status(409).json({ error: 'Este email já possui acesso. Use o login.' });
     }
-
-    // If exists but NOT approved: allow re-verification
-    // (handles cases where phone_verified=true was set without email OTP)
-    if (existing && !existing.approved) {
-      // Reset to unverified so they go through email OTP again
-      await supabaseAdmin.from('phone_users')
-        .update({ phone_verified: false, updated_at: new Date() })
-        .eq('id', existing.id);
+    if (existing?.phone_verified) {
+      return res.status(409).json({
+        error: 'Cadastro já registrado e aguardando aprovação.',
+        pending: true,
+      });
     }
 
     // Rate limit: 1 OTP per minute per email
@@ -261,12 +213,24 @@ router.post('/register', async (req, res) => {
       expires_at: expires.toISOString(),
     }]);
 
-    // Email OTP temporarily disabled — account restoration pending
-    // TODO: re-enable sendOTPEmail() once Gmail account is restored
-    console.log('[PhoneAuth] OTP (email disabled):', otp, '→', email);
+    // Send OTP email — fail loudly so config errors surface to the user
+    const emailSent = await sendOTPEmail(email, otp, name);
+    if (!emailSent) {
+      // Email failed — delete the OTP record so user can try again
+      await supabaseAdmin.from('phone_auth_requests').delete()
+        .eq('phone', 'email:' + email.toLowerCase()).eq('used', false).catch(() => {});
+      return res.status(500).json({
+        error: 'Falha ao enviar o código por email. Verifique se GMAIL_USER e GMAIL_APP_PASSWORD estão configurados no servidor.',
+      });
+    }
+    console.log('[PhoneAuth] OTP sent to', email);
 
-    // Skip OTP step while email is down — go straight to pending admin approval
-    return res.json({ success: true, pending: true });
+    return res.json({
+      success:            true,
+      pendingVerification: true,
+      maskedEmail:        email.replace(/(.{2})(.*)(@.*)/, '$1***$3'),
+      expiresIn:          300,
+    });
   } catch (err) {
     console.error('[PhoneAuth] register error:', err.message);
     return res.status(500).json({ error: err.message });
