@@ -214,18 +214,21 @@ router.post('/register', async (req, res) => {
     const pwErr = validatePassword(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    // Check if already registered and approved
+    // Check if already registered
     const { data: existing } = await supabaseAdmin
       .from('phone_users').select('id, approved, phone_verified').ilike('email', email).maybeSingle();
 
     if (existing?.approved) {
       return res.status(409).json({ error: 'Este email já possui acesso. Use o login.' });
     }
-    if (existing?.phone_verified) {
-      return res.status(409).json({
-        error: 'Cadastro já registrado e aguardando aprovação.',
-        pending: true,
-      });
+
+    // If exists but NOT approved: allow re-verification
+    // (handles cases where phone_verified=true was set without email OTP)
+    if (existing && !existing.approved) {
+      // Reset to unverified so they go through email OTP again
+      await supabaseAdmin.from('phone_users')
+        .update({ phone_verified: false, updated_at: new Date() })
+        .eq('id', existing.id);
     }
 
     // Rate limit: 1 OTP per minute per email
