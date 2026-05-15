@@ -44,8 +44,17 @@ function verifyPassword(password, salt, hash) {
 }
 
 // ── OTP helpers ───────────────────────────────────────────────────────────────
+function generateOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
+function hashOTP(otp)  { return crypto.createHash('sha256').update(otp).digest('hex'); }
+
+function normalizePhone(raw) {
+  let phone = (raw || '').replace(/\D/g, '');
+  if (phone.startsWith('0')) phone = phone.slice(1);
+  if (!phone.startsWith('55') && phone.length <= 11) phone = '55' + phone;
+  if (!phone.startsWith('+')) phone = '+' + phone;
   if (phone.length < 12 || phone.length > 15) throw new Error('Número de telefone inválido');
   return phone;
+}
 
 // ── OTP sender ────────────────────────────────────────────────────────────────
 /**
@@ -94,30 +103,89 @@ async function sendWhatsAppMeta(phone, message) {
  * No external service needed. Works with Gmail OAuth2 or any SMTP already configured.
  */
 async function sendOTPEmail(email, otp, name) {
-  if (!email) return false;
+  if (!email) throw new Error('Email não fornecido');
+
+  const firstName = (name || '').split(' ')[0] || 'Técnico';
+  const subject   = otp + ' — Código de verificação Belenergy';
+  const html = '<div style="font-family:Arial,sans-serif;padding:24px;max-width:400px">'
+    + '<h2 style="color:#333">Belenergy Support Pro</h2>'
+    + '<p>Olá, ' + firstName + '!</p>'
+    + '<p>Seu código de verificação:</p>'
+    + '<div style="font-size:36px;font-weight:bold;letter-spacing:10px;background:#f5f5f5;'
+    + 'padding:16px;text-align:center;border-radius:8px;margin:16px 0">' + otp + '</div>'
+    + '<p style="color:#666;font-size:12px">Válido por 5 minutos. Não compartilhe.</p>'
+    + '</div>';
+
+  // Strategy 1: Gmail API via OAuth2 (uses stored Drive token — no SMTP/App Password needed)
+  // This bypasses 534/535 SMTP errors completely.
   try {
-    const { sendEmail } = require('./sheets');
-    const firstName = (name || '').split(' ')[0] || 'Técnico';
-    // Plain, simple HTML — avoids render issues in some email clients
-    await sendEmail({
-      to:      email,
-      subject: otp + ' — Código de verificação Belenergy Support Pro',
-      html: '<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:24px">'
-        + '<h2 style="color:#333">Belenergy Support Pro</h2>'
-        + '<p>Olá, ' + firstName + '!</p>'
-        + '<p>Seu código de verificação:</p>'
-        + '<div style="text-align:center;padding:20px;background:#f5f5f5;border-radius:8px;margin:20px 0">'
-        + '<span style="font-size:40px;font-weight:bold;letter-spacing:12px;color:#333;font-family:monospace">' + otp + '</span>'
-        + '</div>'
-        + '<p style="color:#666;font-size:13px">Válido por 5 minutos. Não compartilhe este código.</p>'
-        + '<p style="color:#999;font-size:11px">Se você não solicitou este código, ignore este email.</p>'
-        + '</div>',
-    });
+    await sendViaGmailAPI(email, subject, html);
+    console.log('[OTP] Sent via Gmail API to', email);
     return true;
-  } catch (err) {
-    console.error('[OTP Email] Failed:', err.message);
-    return false;
+  } catch (apiErr) {
+    console.warn('[OTP] Gmail API failed:', apiErr.message, '— trying SMTP fallback');
   }
+
+  // Strategy 2: SMTP App Password fallback (may fail if account recently restored)
+  const { sendEmail } = require('./sheets');
+  await sendEmail({ to: email, subject, html });
+  console.log('[OTP] Sent via SMTP to', email);
+  return true;
+}
+
+// ── Gmail API sender (OAuth2) ──────────────────────────────────────────────────
+// Uses the master account's stored Drive OAuth token to send via Gmail API.
+// No SMTP, no App Password — works even after account restorations.
+async function sendViaGmailAPI(to, subject, html) {
+  const path = require('path');
+  const fs   = require('fs');
+  const { google } = require('googleapis');
+  const { supabaseAdmin } = require('../services/db');
+
+  // Load credentials.json (same file Drive uses)
+  const credPath = process.env.GOOGLE_CREDENTIALS_PATH
+    || path.join(process.env.BASE_DIR || process.cwd(), 'credentials.json');
+  const raw   = JSON.parse(fs.readFileSync(credPath));
+  const creds = raw.installed || raw.web;
+
+  // Get master account's stored token (role_id = 1)
+  const { data: master } = await supabaseAdmin
+    .from('settings_user')
+    .select('google_token, user_id')
+    .eq('role_id', 1)
+    .limit(1)
+    .maybeSingle();
+
+  if (!master?.google_token) throw new Error('Master Google token não encontrado — faça login no Drive primeiro');
+
+  const oauth2 = new google.auth.OAuth2(creds.client_id, creds.client_secret, creds.redirect_uris[0]);
+  oauth2.setCredentials(master.google_token);
+
+  const gmail = google.gmail({ version: 'v1', auth: oauth2 });
+
+  // Build RFC 2822 message (required by Gmail API)
+  const from    = process.env.GMAIL_USER || master.user_id;
+  const raw_msg = [
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    `From: "Belenergy Support Pro" <${from}>`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    '',
+    html,
+  ].join('\r\n');
+
+  const encoded = Buffer.from(raw_msg)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw: encoded },
+  });
 }
 
 async function sendOTP(phone, otp, name, email) {
@@ -134,12 +202,22 @@ async function sendOTP(phone, otp, name, email) {
 }
 
 
-async function notifyUser(email, phone, msg) {
+async function notifyUser(email, phone, msg, htmlBody) {
   try {
     if (email) {
+      const html = htmlBody || '<div style="font-family:Arial,sans-serif;padding:20px;max-width:420px">'
+        + '<h2 style="color:#333">Belenergy Support Pro</h2>'
+        + '<p>' + msg + '</p>'
+        + '</div>';
+      // Use Gmail API first (avoids SMTP 534 issues)
+      try {
+        await sendViaGmailAPI(email, 'Belenergy Support Pro', html);
+        return;
+      } catch {}
+      // Fallback to SMTP
       const { sendEmail } = require('./sheets');
-      await sendEmail({ to: email, subject: 'Belenergy Support Pro', html: '<p style="font-family:sans-serif">' + msg + '</p>' });
-    } else {
+      await sendEmail({ to: email, subject: 'Belenergy Support Pro', html });
+    } else if (phone) {
       await sendWhatsAppMeta(phone, msg);
     }
   } catch (e) { console.warn('[Notify]', e.message); }
@@ -173,18 +251,21 @@ router.post('/register', async (req, res) => {
     const pwErr = validatePassword(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    // Check if already registered and approved
+    // Check if already registered
     const { data: existing } = await supabaseAdmin
       .from('phone_users').select('id, approved, phone_verified').ilike('email', email).maybeSingle();
 
     if (existing?.approved) {
       return res.status(409).json({ error: 'Este email já possui acesso. Use o login.' });
     }
-    if (existing?.phone_verified) {
-      return res.status(409).json({
-        error: 'Cadastro já registrado e aguardando aprovação.',
-        pending: true,
-      });
+
+    // If exists but NOT approved: allow re-verification
+    // (handles cases where phone_verified=true was set without email OTP)
+    if (existing && !existing.approved) {
+      // Reset to unverified so they go through email OTP again
+      await supabaseAdmin.from('phone_users')
+        .update({ phone_verified: false, updated_at: new Date() })
+        .eq('id', existing.id);
     }
 
     // Rate limit: 1 OTP per minute per email
@@ -213,17 +294,59 @@ router.post('/register', async (req, res) => {
       expires_at: expires.toISOString(),
     }]);
 
-    // Send OTP email — fail loudly so config errors surface to the user
-    const emailSent = await sendOTPEmail(email, otp, name);
-    if (!emailSent) {
-      // Email failed — delete the OTP record so user can try again
-      await supabaseAdmin.from('phone_auth_requests').delete()
-        .eq('phone', 'email:' + email.toLowerCase()).eq('used', false).catch(() => {});
-      return res.status(500).json({
-        error: 'Falha ao enviar o código por email. Verifique se GMAIL_USER e GMAIL_APP_PASSWORD estão configurados no servidor.',
-      });
+    // Send OTP via email (Resend.com or Gmail fallback)
+    try {
+      await sendOTPEmail(email, otp, name);
+      console.log('[PhoneAuth] OTP sent to', email);
+    } catch (emailErr) {
+      console.error('[PhoneAuth] Email failed:', emailErr.message);
+      try {
+        await supabaseAdmin.from('phone_auth_requests').delete()
+          .eq('phone', 'email:' + email.toLowerCase()).eq('used', false);
+      } catch (_) {}
+      return res.status(500).json({ error: 'Falha ao enviar o código: ' + emailErr.message });
     }
-    console.log('[PhoneAuth] OTP sent to', email);
+
+    // Notify all admins + masters about new registration request
+    try {
+      const { data: admins } = await supabaseAdmin
+        .from('phone_users')
+        .select('email, name')
+        .eq('approved', true)
+        .in('role_id', [1, 2]);
+
+      // Also get Google OAuth admins
+      const { data: googleAdmins } = await supabaseAdmin
+        .from('settings_user')
+        .select('user_id')
+        .in('role_id', [1, 2]);
+
+      const adminEmails = new Set();
+      (admins || []).forEach(a => a.email && adminEmails.add(a.email));
+
+      if (googleAdmins?.length) {
+        const { data: googleUsers } = await supabaseAdmin
+          .from('settings_user')
+          .select('user_id')
+          .in('role_id', [1, 2]);
+        // user_id for Google users is their email
+        googleUsers?.forEach(u => u.user_id?.includes('@') && adminEmails.add(u.user_id));
+      }
+
+      if (adminEmails.size > 0) {
+        const adminHtml = '<div style="font-family:Arial,sans-serif;padding:24px;max-width:440px">'
+          + '<h2 style="color:#333">🔔 Nova solicitação de acesso</h2>'
+          + '<p><b>' + name + '</b> (' + email + ') solicitou acesso ao Belenergy Support Pro.</p>'
+          + '<div style="margin:16px 0;padding:12px;background:#fefce8;border-left:4px solid #eab308;border-radius:4px">'
+          + 'Acesse <b>Configurações → Aprovações → Usuários Telefone</b> para aprovar ou rejeitar.'
+          + '</div>'
+          + '</div>';
+        for (const adminEmail of adminEmails) {
+          await notifyUser(adminEmail, null, 'Nova solicitação de acesso de ' + name, adminHtml).catch(() => {});
+        }
+        console.log('[PhoneAuth] Admin(s) notified:', [...adminEmails].join(', '));
+      }
+    } catch (e) { console.warn('[PhoneAuth] Admin notify failed:', e.message); }
 
     return res.json({
       success:            true,
@@ -593,14 +716,24 @@ router.post('/admin/approve/:id', async (req, res) => {
         updated_at: new Date(),
       }], { onConflict: 'user_id' });
 
-      // Notify user via WhatsApp
+      // Email approval confirmation to user
       try {
-        const { data: pu } = await supabaseAdmin.from('phone_users').select('phone, name').eq('id', userId).maybeSingle();
-        if (pu) {
-          const msg = `✅ Belenergy Support Pro\n\nOlá ${pu.name.split(' ')[0]}! Seu acesso foi aprovado. Faça login agora.`;
-          await notifyUser(pu.email || null, pu.phone, msg);
+        const { data: pu } = await supabaseAdmin
+          .from('phone_users').select('phone, name, email').eq('id', userId).maybeSingle();
+        if (pu?.email) {
+          const first = (pu.name || 'Técnico').split(' ')[0];
+          const html = '<div style="font-family:Arial,sans-serif;padding:28px;max-width:440px">'
+            + '<h2 style="color:#333">✅ Acesso aprovado!</h2>'
+            + '<p>Olá, <b>' + first + '</b>!</p>'
+            + '<p>Seu cadastro foi aprovado. Você já pode fazer login no <b>Belenergy Support Pro</b>.</p>'
+            + '<div style="margin:20px 0;padding:14px;background:#f0fdf4;border-left:4px solid #22c55e;border-radius:4px">'
+            + '<b>Acesse agora:</b> Use seu email e senha cadastrados para entrar.'
+            + '</div>'
+            + '<p style="color:#666;font-size:12px">Bem-vindo à equipe!</p>'
+            + '</div>';
+          await notifyUser(pu.email, pu.phone, 'Seu acesso foi aprovado!', html);
         }
-      } catch {}
+      } catch (e) { console.warn('[Approve] Email failed:', e.message); }
 
     } else if (action === 'reject') {
       await supabaseAdmin.from('phone_users').delete().eq('id', userId);

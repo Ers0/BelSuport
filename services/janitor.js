@@ -14,15 +14,59 @@ const { supabaseAdmin } = require('./db');
 // ═══════════════════════════════════════════════════════════════════
 
 const BRAND_ALIASES = {
+  // Hoymiles variants (PT + EN phonetic)
   'roy miles':'Hoymiles','roimiles':'Hoymiles','hoy miles':'Hoymiles',
   'hoymile':'Hoymiles','hoymilles':'Hoymiles','heimyles':'Hoymiles',
-  'deie':'Deye','daie':'Deye','dei':'Deye','dye':'Deye',
+  'hoy-miles':'Hoymiles','hoymais':'Hoymiles','oi miles':'Hoymiles',
+
+  // Deye variants
+  'deie':'Deye','daie':'Deye','dei':'Deye','dye':'Deye','daiye':'Deye',
+  'die':'Deye','dayee':'Deye',
+
+  // Huawei variants (PT + EN)
   'howei':'Huawei','huawi':'Huawei','huwai':'Huawei',
-  'sun grow':'Sungrow','sungrou':'Sungrow',
-  'fox es':'FoxESS','foxes':'FoxESS',
-  'good we':'GoodWe','gody':'GoodWe',
-  'groat':'Growatt','growat':'Growatt',
-  'micro':'microinversor','inversor de ir':'microinversor',
+  'hua wei':'Huawei','hawuei':'Huawei','huwei':'Huawei',
+
+  // Sungrow variants
+  'sun grow':'Sungrow','sungrou':'Sungrow','sangrow':'Sungrow',
+  'sun-grow':'Sungrow','sung row':'Sungrow',
+
+  // FoxESS variants
+  'fox es':'FoxESS','foxes':'FoxESS','fox-ess':'FoxESS','fox ess':'FoxESS',
+
+  // GoodWe variants
+  'good we':'GoodWe','gody':'GoodWe','good-we':'GoodWe','goodwee':'GoodWe',
+
+  // Growatt variants
+  'groat':'Growatt','growat':'Growatt','gro watt':'Growatt','grow at':'Growatt',
+
+  // SMA variants
+  's.m.a':'SMA','s m a':'SMA',
+
+  // Fronius variants
+  'frónius':'Fronius','fronius':'Fronius','fronious':'Fronius',
+
+  // Solax variants
+  'sol ax':'Solax','so lax':'Solax',
+
+  // ABB variants
+  'a.b.b':'ABB','a b b':'ABB',
+
+  // Equipment type normalization (PT + EN)
+  'micro inversor':'microinversor','micro-inversor':'microinversor',
+  'microinverter':'microinversor','micro inverter':'microinversor',
+  'inversor de ir':'microinversor','inversor string':'inversor',
+  'string inverter':'inversor','string inv':'inversor',
+  'on grid':'on-grid','off grid':'off-grid',
+  'bateria':'BESS','battery':'BESS','baterias':'BESS',
+  'energy storage':'BESS','armazenamento':'BESS',
+  'datalogger':'DTU','data logger':'DTU','logger':'DTU',
+  'comunicação':'comunicação','communication':'comunicação',
+  'alarm':'alarme','error code':'código de erro','fault':'falha',
+  'no power':'sem geração','no generation':'sem geração',
+  'not connecting':'sem conexão','offline':'sem conexão',
+  'password':'senha','wi-fi':'WiFi','wifi':'WiFi',
+  'wi fi':'WiFi','network':'rede','grid':'rede',
 };
 
 function normalizeBrands(query) {
@@ -38,9 +82,10 @@ function normalizeBrands(query) {
 function detectBrand(query) {
   if (!query) return null;
   const lq = query.toLowerCase();
-  return ['Hoymiles','Deye','Huawei','Sungrow','FoxESS','GoodWe',
-    'Fronius','Growatt','SMA','ABB','Solis','Solax']
-    .find(b => lq.includes(b.toLowerCase())) || null;
+  const brands = ['Hoymiles','Deye','Huawei','Sungrow','FoxESS','GoodWe',
+    'Fronius','Growatt','SMA','ABB','Solis','Solax','Growatt','Risen',
+    'Canadian Solar','Jinko','LONGi','BYD','Pylontech'];
+  return brands.find(b => lq.includes(b.toLowerCase())) || null;
 }
 
 const _expandCache = new Map();
@@ -380,10 +425,10 @@ async function runJanitor(opts) {
     try {
       const r = await archiveTable(tableName, cutoff, githubCfg, dryRun);
       results[tableName] = r; totalArchived += r.archived || 0; totalDeleted += r.deleted || 0;
-      await supabaseAdmin.from('janitor_log').insert([{ triggered_by: opts.userId, table_name: tableName, records_archived: r.archived || 0, records_deleted: r.deleted || 0, status: 'ok', dry_run: dryRun }]).catch(() => {});
+      try { await supabaseAdmin.from('janitor_log').insert([{ triggered_by: opts.userId, table_name: tableName, records_archived: r.archived || 0, records_deleted: r.deleted || 0, status: 'ok', dry_run: dryRun }]); } catch (_) {}
     } catch (err) {
       results[tableName] = { error: err.message };
-      await supabaseAdmin.from('janitor_log').insert([{ triggered_by: opts.userId, table_name: tableName, status: 'error', error_msg: err.message.slice(0, 300), dry_run: dryRun }]).catch(() => {});
+      try { await supabaseAdmin.from('janitor_log').insert([{ triggered_by: opts.userId, table_name: tableName, status: 'error', error_msg: err.message.slice(0, 300), dry_run: dryRun }]); } catch (_) {}
     }
   }
   if (!dryRun) await updateSettings({ janitor_last_run: new Date() });

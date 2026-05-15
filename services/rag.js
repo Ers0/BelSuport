@@ -157,9 +157,15 @@ function buildSystemPrompt(chunks) {
     `## Fonte`,
     `[Nome da solucao utilizada]`,
     ``,
-    `REGRA FINAL: Se voce nao encontrar a informacao dentro das solucoes acima, escreva apenas:`,
-    `"⚠️ Esta informacao nao consta nas solucoes cadastradas. Consulte o fabricante."`,
-    `Proibido adicionar qualquer conteudo que nao esteja nas solucoes acima.`,
+    `LANGUAGE RULE: Detect the language of the user's query and respond in that same language.`,
+    `If query is in English → answer in English. Se a query for em Português → responder em Português.`,
+    `Brand names (Hoymiles, Deye, Huawei, Sungrow, etc.) stay unchanged regardless of language.`,
+    ``,
+    `REGRA FINAL / FINAL RULE:`,
+    `If you cannot find the information in the solutions above, write ONLY:`,
+    `"⚠️ Esta informação não consta nas soluções cadastradas. Consulte o fabricante." (PT)`,
+    `or "⚠️ This information is not in the registered solutions. Please consult the manufacturer." (EN)`,
+    `NEVER add content not present in the solutions above.`,
   ].join('\n');
 }
 
@@ -185,6 +191,7 @@ async function callGroq(system, user) {
 
 // ── Text Search Tier — Solution Centre (no embeddings needed) ─────────────────
 // Searches solutions table by keywords in title + content + brand + tags.
+// Bilingual: works with English and Portuguese queries.
 // This ensures Solution Centre is ALWAYS searched even before Reindexar runs.
 async function textSearchSolutions(query, opts) {
   opts = opts || {};
