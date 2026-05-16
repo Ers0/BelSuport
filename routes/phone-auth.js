@@ -736,7 +736,38 @@ router.post('/admin/approve/:id', async (req, res) => {
       } catch (e) { console.warn('[Approve] Email failed:', e.message); }
 
     } else if (action === 'reject') {
+      // Reject pending registration — delete entirely
       await supabaseAdmin.from('phone_users').delete().eq('id', userId);
+
+    } else if (action === 'revoke') {
+      // Revoke access for approved user — keeps account but blocks login
+      await supabaseAdmin.from('phone_users').update({
+        approved:    false,
+        approved_by: null,
+        updated_at:  new Date(),
+      }).eq('id', userId);
+
+      // Remove RBAC row so they can't access anything
+      await supabaseAdmin.from('settings_user').delete().eq('user_id', userId);
+
+      // Invalidate all active sessions
+      await supabaseAdmin.from('persistent_sessions').delete().eq('user_id', userId);
+
+      // Notify user their access was revoked
+      try {
+        const { data: pu } = await supabaseAdmin
+          .from('phone_users').select('email, name, phone').eq('id', userId).maybeSingle();
+        if (pu?.email) {
+          const first = (pu.name || 'Usuário').split(' ')[0];
+          const html  = '<div style="font-family:Arial,sans-serif;padding:24px;max-width:440px">'
+            + '<h2 style="color:#c00">⛔ Acesso revogado</h2>'
+            + '<p>Olá, <b>' + first + '</b>.</p>'
+            + '<p>Seu acesso ao <b>Belenergy Support Pro</b> foi revogado por um administrador.</p>'
+            + '<p style="color:#666;font-size:12px">Em caso de dúvidas, entre em contato com o suporte.</p>'
+            + '</div>';
+          await notifyUser(pu.email, pu.phone, 'Seu acesso foi revogado.', html);
+        }
+      } catch (e) { console.warn('[Revoke] Notify failed:', e.message); }
     }
 
     return res.json({ success: true });

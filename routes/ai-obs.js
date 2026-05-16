@@ -163,18 +163,66 @@ router.get('/manuals', masterOnly, async (req, res) => {
   }
 });
 
-// ── POST /api/ai-obs/reindex-manuals ─────────────────────────────────────────
-router.post('/reindex-manuals', masterOnly, async (req, res) => {
-  try {
-    // manual-rag service not available in local mode
-    // const { indexManuals } = require('../services/manual-rag');
-    const indexManuals = async () => ({ indexed: 0, message: 'Reindexacao disponivel apenas via Gemini API' });
-    const result = await indexManuals(req.body || {});
-    // result has: { results, indexed, skipped, total, error? }
-    return res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+// ── POST /api/ai-obs/index-manuals — SSE streaming progress ─────────────────
+// Returns Server-Sent Events so UI can show live progress per file
+router.post('/index-manuals', masterOnly, async (req, res) => {
+  res.set({
+    'Content-Type':  'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection':    'keep-alive',
+  });
+
+  function send(data) {
+    res.write('data: ' + JSON.stringify(data) + '\n\n');
   }
+
+  try {
+    const { indexManualsFolder } = require('../services/manual-indexer');
+    const { data: cfg } = await supabaseAdmin
+      .from('settings_global').select('manuals_drive_id').eq('id', 1).maybeSingle();
+    const folderId = cfg?.manuals_drive_id || process.env.MANUALS_DRIVE_ID;
+
+    if (!folderId) {
+      send({ type: 'error', msg: 'ID da pasta de Manuais não configurado em Configurações → Google Drive' });
+      return res.end();
+    }
+
+    send({ type: 'start', msg: 'Iniciando indexação de manuais...' });
+
+    const results = await indexManualsFolder(folderId, req.user.id, (progress) => {
+      send(progress);
+    });
+
+    send({ type: 'complete', results, msg: `Indexação concluída! ${results.filter(r=>r.status==='ok').length} arquivo(s) processado(s).` });
+  } catch (err) {
+    send({ type: 'error', msg: err.message });
+  }
+  res.end();
+});
+
+// ── GET /api/ai-obs/index-log — list indexed files ────────────────────────────
+router.get('/index-log', masterOnly, async (req, res) => {
+  try {
+    const { data } = await supabaseAdmin
+      .from('manual_index_log')
+      .select('*')
+      .order('indexed_at', { ascending: false })
+      .limit(100);
+    return res.json(data || []);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── DELETE /api/ai-obs/index-log/:fileId — re-index a specific file ───────────
+router.delete('/index-log/:fileId', masterOnly, async (req, res) => {
+  try {
+    await supabaseAdmin.from('manual_index_log').delete().eq('drive_file_id', req.params.fileId);
+    return res.json({ success: true, msg: 'Arquivo removido do índice — será re-indexado na próxima execução.' });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/ai-obs/reindex-manuals (legacy stub — use /index-manuals) ─────
+router.post('/reindex-manuals', masterOnly, async (req, res) => {
+  return res.json({ message: 'Use POST /api/ai-obs/index-manuals for SSE progress.' });
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

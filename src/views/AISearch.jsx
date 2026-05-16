@@ -152,6 +152,40 @@ export default function AISearch({ showToast, user }) {
   const bottomRef = useRef(null);
   const srRef    = useRef(null);
 
+  // Load conversation history from localStorage on mount
+  const historyKey = `belenergy_ai_history_${user?.id || 'guest'}`;
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(historyKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) setResults(parsed);
+      }
+    } catch {}
+  }, [historyKey]);
+
+  // Save history whenever results change
+  useEffect(() => {
+    if (results.length === 0) return;
+    try {
+      // Keep last 30 exchanges to avoid localStorage bloat
+      const toSave = results.slice(-30).map(r => ({
+        ...r,
+        // Strip large content from stored results to save space
+        result: r.result ? {
+          answer:      (r.result.answer || '').slice(0, 2000),
+          similarity:  r.result.similarity,
+          fallback:    r.result.fallback,
+          usedTextTier: r.result.usedTextTier,
+          usedColdTier: r.result.usedColdTier,
+          sources:     (r.result.sources || []).slice(0, 5),
+          elapsedMs:   r.result.elapsedMs,
+        } : null,
+      }));
+      localStorage.setItem(historyKey, JSON.stringify(toSave));
+    } catch {}
+  }, [results, historyKey]);
+
   useEffect(() => {
     if (bottomRef.current) bottomRef.current.scrollIntoView({ behavior:'smooth' });
   }, [results]);
@@ -218,12 +252,26 @@ export default function AISearch({ showToast, user }) {
     <div style={{ display:'flex', flexDirection:'column', height:'calc(100vh - 60px)', padding:'0 0 0 0' }}>
       {/* Header */}
       <div style={{ padding:'24px 32px 16px', borderBottom:'1px solid var(--b1)', flexShrink:0 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:4 }}>
-          <div style={{ width:40, height:40, borderRadius:12, background:'linear-gradient(135deg,var(--y),#FF8C00)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:20 }}>🔍</div>
-          <div>
-            <h1 style={{ fontSize:22, fontWeight:800, letterSpacing:'-.02em' }}>Busca IA</h1>
-            <p style={{ fontSize:12, color:'var(--tm)' }}>Pesquise soluções, manuais e histórico técnico com IA</p>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:4 }}>
+            <div style={{ width:40, height:40, borderRadius:12, background:'linear-gradient(135deg,var(--y),#FF8C00)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:20 }}>🔍</div>
+            <div>
+              <h1 style={{ fontSize:22, fontWeight:800, letterSpacing:'-.02em' }}>Busca IA</h1>
+              <p style={{ fontSize:12, color:'var(--tm)' }}>Pesquise soluções, manuais e histórico técnico com IA</p>
+            </div>
           </div>
+          {results.length > 0 && (
+            <button onClick={() => {
+              setResults([]);
+              try { localStorage.removeItem(historyKey); } catch {}
+            }} style={{
+              padding:'6px 12px', background:'var(--s2)', border:'1px solid var(--b1)',
+              borderRadius:'var(--rs)', fontSize:11, color:'var(--tm)', cursor:'pointer',
+              fontFamily:'inherit', fontWeight:600,
+            }}>
+              🗑 Limpar histórico
+            </button>
+          )}
         </div>
       </div>
 

@@ -434,7 +434,7 @@ export default function App() {
     historico:    <Historico showToast={showToast} user={user} />,
     jira:         <Jira showToast={showToast} />,
     configuracoes:<Configuracoes showToast={showToast} user={user} />,
-    ai_obs:       <AIObservability showToast={showToast} />,
+    ai_obs:       <AIObservability showToast={showToast} user={user} />,
     ai_search:    <AISearch showToast={showToast} user={user} />,
   };
 
@@ -451,7 +451,7 @@ export default function App() {
         notificationBell={<NotificationBell sseEvent={lastSseEvent} />}
         watcherStatus={watcherStatus}
       />
-      <main style={{ flex:1, overflowY:'auto', overflowX:'hidden', background:'var(--bg)', minHeight:'100vh', position:'relative' }}>
+      <main style={{ flex:1, overflowY:'auto', overflowX:'hidden', background:'var(--bg)', minHeight:'100vh', position:'relative', minWidth:0, WebkitOverflowScrolling:'touch', paddingBottom:'env(safe-area-inset-bottom)' }}>
         <div key={view} style={{ animation:'viewIn .25s cubic-bezier(0.4,0,0.2,1)' }}>
           {VIEWS[view]}
         </div>

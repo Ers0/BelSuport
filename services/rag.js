@@ -268,6 +268,71 @@ async function textSearchSolutions(query, opts) {
   }
 }
 
+
+// ── Alarm Knowledge Tier — indexed manual alarm codes ─────────────────────────
+// Searches alarm_knowledge table populated by the manual indexer.
+// Tiny footprint: only codes + brief descriptions, no full manual content.
+async function alarmKnowledgeSearch(query, opts) {
+  opts = opts || {};
+  try {
+    const terms = query.toLowerCase()
+      .replace(/[^a-z0-9\s]/gi, ' ')
+      .split(/\s+/)
+      .filter(t => t.length >= 2)
+      .slice(0, 8);
+
+    if (!terms.length) return [];
+
+    // Brand filter if detected
+    const brand = opts.brand;
+    let q = supabaseAdmin
+      .from('alarm_knowledge')
+      .select('id, fabricante, code, description, cause, solution, severity, source_file')
+      .limit(150);
+
+    if (brand) q = q.ilike('fabricante', `%${brand}%`);
+
+    const { data, error } = await q;
+    if (error || !data?.length) return [];
+
+    return data
+      .map(row => {
+        const haystack = [row.code, row.fabricante, row.description, row.cause, row.solution]
+          .join(' ').toLowerCase();
+        let score = 0;
+        for (const t of terms) {
+          if (row.code?.toLowerCase() === t) score += 10; // exact code match
+          else if (row.code?.toLowerCase().includes(t)) score += 5;
+          else if (haystack.includes(t)) score += 1;
+        }
+        if (!score) return null;
+        if (brand && row.fabricante?.toLowerCase() === brand.toLowerCase()) score += 4;
+
+        const normalized = Math.min(0.69, 0.35 + score / 15);
+        return {
+          id:         'alarm_' + row.id,
+          title:      `${row.code ? row.code + ' — ' : ''}${row.description}`,
+          content:    [
+            row.cause    && '**Causa:** ' + row.cause,
+            row.solution && '**Solução:** ' + row.solution,
+            row.source_file && `*Fonte: ${row.source_file}*`,
+          ].filter(Boolean).join('\n'),
+          brand:      row.fabricante,
+          tags:       [row.fabricante?.toLowerCase(), row.code, 'alarme'].filter(Boolean),
+          similarity: normalized,
+          source:     'alarm',
+          severity:   row.severity,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, opts.topK || 5);
+  } catch (err) {
+    console.warn('[RAG] Alarm knowledge search error:', err.message);
+    return [];
+  }
+}
+
 // ── MAIN: ragQuery ────────────────────────────────────────────────────────────
 async function ragQuery(rawQuery, opts) {
   opts = opts || {};
@@ -314,7 +379,16 @@ async function ragQuery(rawQuery, opts) {
     }
   }
 
-  // ── Step 5: Cold tier — GitHub JSON (historical knowledge base) ───────────
+  // ── Step 5: Alarm Knowledge tier — indexed manual alarm codes ───────────────
+  // Searches alarm_knowledge table (populated by Drive manual indexer).
+  const alarmChunks = await alarmKnowledgeSearch(searchQuery, { brand, topK: 5 });
+  if (alarmChunks.length > 0) {
+    const seenIds = new Set(allChunks.map(c => String(c.id)));
+    allChunks = allChunks.concat(alarmChunks.filter(c => !seenIds.has(String(c.id))));
+    console.log('[RAG] Alarm KB found', alarmChunks.length, 'entries');
+  }
+
+  // ── Step 6: Cold tier — GitHub JSON (historical knowledge base) ───────────
   // Only runs if BOTH hot AND text search found nothing useful.
   const bestSoFar = allChunks.filter(c => c.similarity >= FALLBACK_THRESHOLD);
   if (bestSoFar.length === 0) {
@@ -326,7 +400,7 @@ async function ragQuery(rawQuery, opts) {
     }
   }
 
-  // ── Step 6: Rank ──────────────────────────────────────────────────────────
+  // ── Step 7: Rank ──────────────────────────────────────────────────────────
   const topChunks = rankChunks(allChunks, { brand });
   const topScore  = topChunks.length > 0 ? topChunks[0].score : 0;
   const isFallback = topChunks.length === 0 || topScore < FALLBACK_THRESHOLD;

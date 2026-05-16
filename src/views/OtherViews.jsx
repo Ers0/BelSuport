@@ -1083,6 +1083,20 @@ function ApprovalManager({ user, showToast }) {
     } catch (e) { showToast('Erro: ' + e.message, 'warn'); }
   }
 
+  async function revokePhoneUser(id, name) {
+    if (!window.confirm(`Revogar acesso de ${name}?
+
+O usuário perderá o acesso imediatamente e receberá uma notificação por email.`)) return;
+    try {
+      await api(`/api/phone-auth/admin/approve/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'revoke' }),
+      });
+      showToast('⛔ Acesso de ' + name + ' revogado.');
+      load();
+    } catch (e) { showToast('Erro: ' + e.message, 'warn'); }
+  }
+
   async function resetPhonePassword(id) {
     const pw = window.prompt('Senha temporária para o usuário (mín. 8 chars, letra + número):');
     if (!pw) return;
@@ -1240,24 +1254,24 @@ function ApprovalManager({ user, showToast }) {
                     </div>
                   </div>
                   <div style={{ display:'flex', gap:6, flexShrink:0, flexWrap:'wrap' }}>
-                    {!u.approved && u.phone_verified && (
+                    {!u.approved && (
                       <>
-                        <button onClick={() => approvePhoneUser(u.id, 'approve', 3)}
-                          style={{ padding:'6px 12px', background:'rgba(34,197,94,.15)', color:'var(--gr)', border:'1px solid rgba(34,197,94,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                        <button onClick={() => approvePhoneUser(u.id, 'approve', 3)} style={{ padding:'6px 12px', background:'rgba(34,197,94,.15)', color:'var(--gr)', border:'1px solid rgba(34,197,94,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
                           ✓ Aprovar
                         </button>
-                        <button onClick={() => approvePhoneUser(u.id, 'reject')}
-                          style={{ padding:'6px 12px', background:'rgba(239,68,68,.1)', color:'var(--re)', border:'1px solid rgba(239,68,68,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                        <button onClick={() => approvePhoneUser(u.id, 'reject')} style={{ padding:'6px 12px', background:'rgba(239,68,68,.1)', color:'var(--re)', border:'1px solid rgba(239,68,68,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
                           ✕ Rejeitar
                         </button>
                       </>
                     )}
                     {u.approved && (
-                      <button onClick={() => resetPhonePassword(u.id)}
-                        style={{ padding:'6px 12px', background:'rgba(96,165,250,.1)', color:'var(--bl)', border:'1px solid rgba(96,165,250,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      <button onClick={() => resetPhonePassword(u.id)} style={{ padding:'6px 12px', background:'rgba(96,165,250,.1)', color:'var(--bl)', border:'1px solid rgba(96,165,250,.3)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
                         🔐 Redefinir Senha
                       </button>
                     )}
+                    <button onClick={() => revokePhoneUser(u.id, u.name)} style={{ padding:'6px 12px', background:'rgba(239,68,68,.08)', color:'var(--re)', border:'1px solid rgba(239,68,68,.25)', borderRadius:'var(--rs)', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      ⛔ Revogar
+                    </button>
                   </div>
                 </div>
 

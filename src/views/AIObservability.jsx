@@ -413,7 +413,131 @@ function renderVoiceMd(text) {
 /* ══════════════════════════════════════════════════════════════════════════════
    MAIN AI OBSERVABILITY DASHBOARD
 ══════════════════════════════════════════════════════════════════════════════ */
-export default function AIObservability({ showToast }) {
+
+// ── Manual Indexer Panel ───────────────────────────────────────────────────────
+function ManualIndexerPanel({ C, user, showToast }) {
+  const [log,      setLog]      = useState([]);
+  const [running,  setRunning]  = useState(false);
+  const [indexed,  setIndexed]  = useState(null);
+  const logRef = React.useRef(null);
+
+  // Load index log on mount
+  React.useEffect(() => {
+    api('/api/ai-obs/index-log').then(setIndexed).catch(() => setIndexed([]));
+  }, []);
+
+  async function startIndexing() {
+    setRunning(true);
+    setLog([{ type:'info', msg:'Conectando ao Google Drive...' }]);
+
+    try {
+      const res = await fetch('/api/ai-obs/index-manuals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + localStorage.getItem('session_token') },
+      });
+
+      const reader = res.body.getReader();
+      const dec    = new TextDecoder();
+      let buf = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const ev = JSON.parse(line.slice(6));
+              setLog(prev => [...prev, ev]);
+              if (logRef.current) logRef.current.scrollTop = 9999;
+              if (ev.type === 'complete') {
+                api('/api/ai-obs/index-log').then(setIndexed).catch(() => {});
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch (err) {
+      setLog(prev => [...prev, { type:'error', msg: err.message }]);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const logColor = { info:'var(--tm)', processing:'var(--ts)', done:'var(--gr)',
+    error:'var(--re)', skip:'var(--tm)', complete:'var(--y)', start:'var(--bl)' };
+
+  return (
+    <div style={{ background:'var(--s1)', border:'1px solid var(--b1)', borderRadius:'var(--rs)', padding:16, marginBottom:16 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+        <div>
+          <div style={{ fontWeight:700, fontSize:13 }}>📖 Indexar Manuais e Datasheets</div>
+          <div style={{ fontSize:11, color:'var(--tm)', marginTop:2 }}>
+            Groq Vision extrai códigos de alarme → armazena apenas palavras-chave no banco
+          </div>
+        </div>
+        <button onClick={startIndexing} disabled={running} style={{
+          padding:'8px 16px', borderRadius:'var(--rs)', fontSize:12, fontWeight:700,
+          cursor: running ? 'default' : 'pointer', fontFamily:'inherit',
+          background: running ? 'var(--s2)' : 'rgba(167,139,250,.15)',
+          border:`1px solid ${running ? 'var(--b1)' : 'rgba(167,139,250,.4)'}`,
+          color: running ? 'var(--tm)' : 'var(--pu)',
+        }}>
+          {running ? '⟳ Indexando...' : '🚀 Iniciar Indexação'}
+        </button>
+      </div>
+
+      {/* Live log */}
+      {log.length > 0 && (
+        <div ref={logRef} style={{
+          background:'var(--b0,#0a0c14)', borderRadius:8, padding:'10px 12px',
+          maxHeight:200, overflowY:'auto', marginBottom:12, fontFamily:'monospace', fontSize:11,
+        }}>
+          {log.map((ev, i) => (
+            <div key={i} style={{ color: logColor[ev.type] || 'var(--tm)', marginBottom:2 }}>
+              {ev.type === 'progress' ? `[${ev.current}/${ev.total}] ${ev.filename}` : ev.msg}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Indexed files */}
+      {indexed !== null && (
+        <div>
+          <div style={{ fontSize:11, color:'var(--tm)', marginBottom:6 }}>
+            {indexed.length} arquivo(s) indexado(s)
+          </div>
+          {indexed.length > 0 && (
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+              {indexed.map((f, i) => (
+                <div key={i} style={{
+                  padding:'4px 10px', background:'rgba(167,139,250,.08)',
+                  border:'1px solid rgba(167,139,250,.2)', borderRadius:999, fontSize:10,
+                  display:'flex', alignItems:'center', gap:6,
+                }}>
+                  <span style={{ color:'var(--pu)', fontWeight:700 }}>{f.brand}</span>
+                  <span style={{ color:'var(--tm)' }}>{f.filename}</span>
+                  <span style={{ color:'var(--gr)' }}>· {f.codes_found} códigos</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {indexed.length === 0 && (
+            <div style={{ fontSize:12, color:'var(--tm)', padding:'8px 0' }}>
+              Nenhum manual indexado ainda. Configure o ID da pasta em{' '}
+              <b>Configurações → Google Drive → ID da pasta de Manuais</b> e clique em Iniciar Indexação.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function AIObservability({ showToast, user }) {
   const [stats,      setStats]      = useState(null);
   const [timeline,   setTimeline]   = useState([]);
   const [errors,     setErrors]     = useState([]);
@@ -657,43 +781,8 @@ export default function AIObservability({ showToast }) {
         </Card>
       </div>
 
-      {/* ── Manuals / Datasheets ─────────────────────────────────────────────── */}
-      <Card style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-          <div>
-            <div style={{ fontWeight: 700, color: C.tx, fontSize: 13 }}>📚 Base de Manuais e Datasheets</div>
-            <div style={{ fontSize: 11, color: C.tm, marginTop: 2 }}>
-              Pasta Google Drive: <code style={{ background: C.s3, padding: '1px 5px', borderRadius: 4, fontSize: 10 }}>manuals/[Marca]/[Categoria]/</code>
-            </div>
-          </div>
-          <button onClick={reindexManuals} disabled={reindexing}
-            style={{ padding: '7px 14px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer',
-              background: C.pu + '20', border: `1px solid ${C.pu}44`, color: C.pu }}>
-            {reindexing ? '⟳ Indexando...' : '📖 Reindexar Manuais do Drive'}
-          </button>
-        </div>
-
-        {manuals ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
-            {manuals.indexed?.length ? manuals.indexed.map((m, i) => (
-              <div key={i} style={{ background: C.s3, border: `1px solid ${C.b1}`, borderRadius: 10, padding: '10px 12px' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: C.pu }}>{m.brand}</div>
-                <div style={{ fontSize: 11, color: C.tm }}>{m.category}</div>
-                <div style={{ fontSize: 10, color: C.ts, marginTop: 4 }}>
-                  {m.chunks} chunks · {m.files?.length} arquivo(s)
-                </div>
-              </div>
-            )) : (
-              <div style={{ gridColumn: '1/-1', fontSize: 12, color: C.tm, padding: '16px 0', textAlign: 'center' }}>
-                Nenhum manual indexado ainda.<br />
-                <span style={{ fontSize: 11 }}>Configure o ID da pasta no Google Drive em <b>Configurações → Google Drive → ID da Pasta de Manuais</b>, depois clique em Reindexar.</span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ fontSize: 12, color: C.tm }}>Carregando...</div>
-        )}
-      </Card>
+      {/* ── Manual Indexer ───────────────────────────────────────────────────── */}
+      <ManualIndexerPanel C={C} user={user} showToast={showToast} />
 
       {/* ── Recent errors ────────────────────────────────────────────────────── */}
       <Card>
