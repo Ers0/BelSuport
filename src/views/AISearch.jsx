@@ -251,7 +251,7 @@ export default function AISearch({ showToast, user }) {
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'calc(100vh - 60px)', padding:'0 0 0 0' }}>
       {/* Header */}
-      <div style={{ padding:'24px 32px 16px', borderBottom:'1px solid var(--b1)', flexShrink:0 }}>
+      <div style={{ padding:'24px clamp(12px,4vw,32px) 16px', borderBottom:'1px solid var(--b1)', flexShrink:0 }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:4 }}>
             <div style={{ width:40, height:40, borderRadius:12, background:'linear-gradient(135deg,var(--y),#FF8C00)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:20 }}>🔍</div>
@@ -276,7 +276,7 @@ export default function AISearch({ showToast, user }) {
       </div>
 
       {/* Chat area */}
-      <div style={{ flex:1, overflowY:'auto', padding:'20px 32px' }}>
+      <div style={{ flex:1, overflowY:'auto', padding:'20px clamp(12px,4vw,32px)' }}>
         {results.length === 0 && (
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', gap:20, color:'var(--tm)', textAlign:'center' }}>
             <div style={{ fontSize:52 }}>🧠</div>
@@ -382,7 +382,7 @@ export default function AISearch({ showToast, user }) {
       </div>
 
       {/* Input */}
-      <div style={{ padding:'16px 32px', borderTop:'1px solid var(--b1)', background:'var(--bg)', flexShrink:0 }}>
+      <div style={{ padding:'16px clamp(12px,4vw,32px)', borderTop:'1px solid var(--b1)', background:'var(--bg)', flexShrink:0 }}>
         <div style={{ display:'flex', gap:8, alignItems:'flex-end' }}>
           <div style={{ flex:1, position:'relative' }}>
             <textarea

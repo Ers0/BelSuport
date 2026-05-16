@@ -18,6 +18,7 @@ import PhoneLogin from './components/PhoneLogin';
 
 export default function App() {
   const [user, setUser]           = useState(null);
+    const [isMobile,   setIsMobile] = React.useState(window.innerWidth < 768);
   const [authReady, setAuthReady] = useState(false);
   const [view, setView]           = useState('registro');
   const [folders, setFolders]     = useState({ organized:[], pending:[] });
@@ -33,6 +34,18 @@ export default function App() {
   const { toasts, toast, showToast } = useToast();
 
   // ── Auth ─────────────────────────────────────────────────────────────────
+  React.useEffect(() => {
+    const fn = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+
+    useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   useEffect(() => {
     const token = localStorage.getItem('session_token');
     if (!token || token === 'null') { setAuthReady(true); return; }

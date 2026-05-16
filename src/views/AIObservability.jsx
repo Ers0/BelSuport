@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api';
 
 /* ── Design tokens (consistent with app theme) ─────────────────────────────── */
@@ -419,10 +419,10 @@ function ManualIndexerPanel({ C, user, showToast }) {
   const [log,      setLog]      = useState([]);
   const [running,  setRunning]  = useState(false);
   const [indexed,  setIndexed]  = useState(null);
-  const logRef = React.useRef(null);
+  const logRef = useRef(null);
 
   // Load index log on mount
-  React.useEffect(() => {
+  useEffect(() => {
     api('/api/ai-obs/index-log').then(setIndexed).catch(() => setIndexed([]));
   }, []);
 
