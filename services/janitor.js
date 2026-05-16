@@ -1,4 +1,56 @@
 'use strict';
+
+// ════════════════════════════════════════════════════════════════════
+// COLD DB ENCRYPTION — AES-256-GCM
+// Set COLD_ENCRYPTION_KEY=<64 hex chars> in .env to enable.
+// Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+// Without key: data is stored as plain JSON (backward compatible).
+// ════════════════════════════════════════════════════════════════════
+const nodeCrypto = require('crypto');
+
+function getColdKey() {
+  const hex = process.env.COLD_ENCRYPTION_KEY || '';
+  if (!hex) return null;
+  if (hex.length !== 64) throw new Error('COLD_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes)');
+  return Buffer.from(hex, 'hex');
+}
+
+function encryptCold(data) {
+  const key = getColdKey();
+  if (!key) return JSON.stringify(data); // no key → plain JSON (backward compat)
+  const iv      = nodeCrypto.randomBytes(12);
+  const cipher  = nodeCrypto.createCipheriv('aes-256-gcm', key, iv);
+  const enc     = Buffer.concat([cipher.update(JSON.stringify(data), 'utf8'), cipher.final()]);
+  const tag     = cipher.getAuthTag();
+  return JSON.stringify({
+    _enc: 1,
+    iv:   iv.toString('hex'),
+    tag:  tag.toString('hex'),
+    data: enc.toString('base64'),
+  });
+}
+
+function decryptCold(raw) {
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return []; }
+
+  // Not encrypted — return as-is (backward compat with old archives)
+  if (!parsed._enc) return Array.isArray(parsed) ? parsed : [];
+
+  const key = getColdKey();
+  if (!key) throw new Error(
+    'Cold DB data is encrypted but COLD_ENCRYPTION_KEY is not set in .env. ' +
+    'Add the key to decrypt existing archives.'
+  );
+  const iv      = Buffer.from(parsed.iv,  'hex');
+  const tag     = Buffer.from(parsed.tag, 'hex');
+  const enc     = Buffer.from(parsed.data, 'base64');
+  const decipher = nodeCrypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const plain = Buffer.concat([decipher.update(enc), decipher.final()]);
+  return JSON.parse(plain.toString('utf8'));
+}
+
 /**
  * services/janitor.js — Data Archival + Query Preprocessing
  *
@@ -156,8 +208,9 @@ async function fetchColdFile(brand) {
       const url = `https://raw.githubusercontent.com/${repo}/${branch}/cold/${fn}`;
       const res = await fetch(url, { headers, signal: AbortSignal.timeout(8_000) });
       if (!res.ok) continue;
-      const data = await res.json();
-      if (Array.isArray(data)) {
+      const raw  = await res.text();
+      const data = decryptCold(raw);
+      if (Array.isArray(data) && data.length > 0) {
         COLD_CACHE.set(key, { data, ts: Date.now() });
         return data;
       }
@@ -319,12 +372,15 @@ async function githubGetFile(cfg, path) {
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('GitHub GET ' + path + ': ' + res.status);
   const data = await res.json();
-  return { sha: data.sha, records: JSON.parse(Buffer.from(data.content, 'base64').toString('utf8')) };
+  const raw = Buffer.from(data.content, 'base64').toString('utf8');
+  return { sha: data.sha, records: decryptCold(raw) };
 }
 
 async function githubPutFile(cfg, path, records, sha, message) {
   const fetch = (await import('node-fetch')).default;
-  const body  = { message: message || 'Janitor archive', content: Buffer.from(JSON.stringify(records, null, 2)).toString('base64'), branch: cfg.branch };
+  // Encrypt before pushing to GitHub
+  const payload = encryptCold(records);
+  const body  = { message: message || 'Janitor archive', content: Buffer.from(payload).toString('base64'), branch: cfg.branch };
   if (sha) body.sha = sha;
   const res = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`, {
     method: 'PUT',
